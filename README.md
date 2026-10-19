@@ -1,161 +1,142 @@
-# dsh-a2a-server
+# dsh-nuncia
 
-独立的 DeepSeek Harness A2A Server 插件。
+Authenticated **A2A** (Agent2Agent) server bridge plugin for
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — named for
+the Roman goddesses of contract, *"whose duty it is to announce agreements."*
 
-将 DSH agent 暴露为 A2A（Agent2Agent）协议端点：
+Exposes a DSH agent as a standard A2A v1.0 endpoint (AgentCard + JSON-RPC +
+SSE), mapping each A2A **Task** to one DSH **Session/Agent**.
 
-- AgentCard：`http://127.0.0.1:4123/.well-known/agent.json`
-- JSON-RPC：`http://127.0.0.1:4123/a2a`
-- SSE：`SendStreamingMessage`
+## Credit
 
-## 特性
+Fork of **[MicroWearld/dsh-a2a-server](https://github.com/MicroWearld/dsh-a2a-server)**
+(BSD-3-Clause). The protocol mapping, task store contract, approval bridge and
+metrics all originate there — thank you for a solid base. This fork differs:
 
-- A2A v1.0 JSON-RPC / SSE
-- Task ↔ DSH Session 映射
-- Bearer token 认证
-- Task TTL 清理
-- Prometheus `/metrics`
-- Task 文件持久化（`persistTasks` + `persistenceRoot`）
-- `input-required` approval 映射
-- Role 归一化（`user` / `ROLE_USER` 都支持）
-- Agent preset 配置（全局 `agentPreset` + 请求体 `metadata.agentPreset` 覆盖）
+| | upstream | this fork |
+|---|---|---|
+| build | TypeScript + `dsh-super-injector` scaffold, needs a full DSH monorepo checkout (`DSH_CHECKOUT`) to compile and bundle | **no build step** — `lib/` is hand-ported plain ESM, installed as-is |
+| protocol lib | bundled into `lib/index.js` | `@a2a-js/sdk` as a normal npm dependency |
+| name | `dsh-a2a-server` | `dsh-nuncia` (metrics: `nuncia_*`) |
+| authority | bearer token only | bearer + **signed authority envelopes** (user intent / override) — *in development, see below* |
 
-## 构建
+`src/` keeps the original TypeScript for reference; it is not compiled.
 
-需要本机有 DeepSeek Harness 源码 checkout，并设置：
+## Layout
 
-```bash
-export DSH_CHECKOUT=/path/to/deepseek-harness
-bash scripts/build.sh
+```
+index.js            bundle entry — re-exports lib/index.js for DSH patches
+lib/index.js        the plugin (plain ESM)
+lib/task-store.js   file-backed A2A Task store (write-chained JSON)
+cordis.patch.yml    default profile patch (inserts the plugin)
+test-smoke.mjs      standalone smoke test (fake ctx, real SDK)
 ```
 
-或直接：
+## Install
 
-```powershell
-$env:DSH_CHECKOUT = "D:\workspace\dsh\deepseek-harness"
-bash scripts/build.sh
+The plugin needs three ambient packages that come from the DSH host, not npm:
+`@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-session`, and the host's
+`@deepseek-ai/schemastery` (config schema). Installable deps are tiny
+(`@a2a-js/sdk` → `jose`, plus plain `schemastery` for this config schema).
+
+```sh
+# 1. put the plugin somewhere stable and install its npm deps
+cd ~/.sylvia            # any location works
+git clone https://github.com/Ayrlin-Renata/dsh-nuncia
+cd dsh-nuncia
+npm install --no-audit --no-fund --legacy-peer-deps
+
+# 2. link the ambient DSH packages from the host tree
+G="$(npm root -g)/@deepseek-ai"
+mkdir -p node_modules/@deepseek-ai
+ln -sfn "$G/dsh/node_modules/@deepseek-ai/dsh-llm"     node_modules/@deepseek-ai/dsh-llm
+ln -sfn "$G/dsh/node_modules/@deepseek-ai/dsh-session" node_modules/@deepseek-ai/dsh-session
+#    (nested layout varies by install method — point them at wherever the
+#     CLI's dependency tree actually keeps dsh-llm / dsh-session)
+
+# 3. register with the profile
+cd ~/.dsh/profiles/web
+ln -sfn ~/.sylvia/dsh-nuncia node_modules/dsh-nuncia
+node -e 'const f="package.json",fs=require("fs"),j=JSON.parse(fs.readFileSync(f));j.dependencies??={};j.dependencies["dsh-nuncia"]="file:'"$HOME"'/.sylvia/dsh-nuncia";fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")'
 ```
 
-## Windows 构建
+Then add the plugin row to the profile's `cordis.patch.yml`
+(`cordis.patch.yml` in this repo is a ready-made example) and restart the
+harness. The standalone entry point also works without a `webServer` service:
+give it `host`/`port` and it serves on its own listener.
 
-```powershell
-$env:DSH_CHECKOUT = "D:\workspace\dsh\deepseek-harness"
-powershell -ExecutionPolicy Bypass -File scripts/build.ps1
-```
-
-或：
-
-```powershell
-npm run build:ps1
-```
-
-## 下载自动构建产物
-
-每次向 `main` 推送代码、更新 Pull Request，或手动运行 GitHub Actions 的
-`Build` 工作流时，都会生成可安装的 npm `.tgz` 包。
-
-### 从 GitHub 网页下载
-
-1. 打开仓库的 [Actions → Build](https://github.com/MicroWearld/dsh-a2a-server/actions/workflows/build.yml)。
-2. 进入最近一次状态为绿色的构建。
-3. 在页面底部的 **Artifacts** 区域下载
-   `dsh-a2a-server-<commit SHA>`。
-4. 解压下载的 ZIP，即可获得 `dsh-a2a-server-<version>.tgz`。
-
-> GitHub Actions 构建产物保留 14 天；长期分发请使用 GitHub Release。
-
-## 安装
-
-使用 DSH 官方插件装配命令：
-
-```powershell
-cd D:\workspace\dsh
-dsh plugin --profile desktop add .\dsh-a2a-server\
-```
-
-安装完成后重启 DSH Desktop（或对应 profile 的运行时）使插件加载。
-
-> 说明：`dsh plugin add` 会将该插件写入 profile 的 `dependencies` 与 `bundles`，并按官方装配流程加载 `cordis.patch.yml`。
-
-## 配置示例
+## Configuration
 
 ```yaml
-- id: a2a-server
-  name: 'dsh-a2a-server'
-  config:
-    path: /a2a
-    agentCardPath: /.well-known/agent.json
-    host: 127.0.0.1
-    port: 4123
-    cwd: /workspace
-    provider: deepseek-official
-    model: deepseek-v4-pro
-    agentPreset: standard
-    auth:
-      type: bearer
-      tokenEnv: A2A_TOKEN
-    taskTtlMs: 3600000
-    metricsPath: /metrics
-    persistTasks: true
-    persistenceRoot: ./.sessions
-    agentCard:
-      name: DeepSeek Harness A2A Agent
-      description: A DeepSeek Harness agent exposed over A2A
+- insert:
+    - id: dsh-nuncia
+      name: 'dsh-nuncia'
+      config:
+        path: /a2a                      # JSON-RPC endpoint
+        agentCardPath: /.well-known/agent.json
+        host: 127.0.0.1                 # standalone listener (no webServer)
+        port: 4123
+        cwd: /path/to/workspace         # absolute; working dir for new agents
+        agentPreset: standard           # preset used to compose agents
+        provider: deepseek-official     # optional model route
+        model: deepseek-v4-pro          # optional model name
+        auth:
+          type: bearer
+          tokenEnv: NUNCIA_A2A_TOKEN    # or `token:` literal
+        taskTtlMs: 3600000              # completed-task retention
+        metricsPath: /metrics           # optional Prometheus text
+        adminPath: /a2a/admin           # status / enable / disable
+        persistTasks: true              # durable task files
+        persistenceRoot: ./.sessions
+        agentCard:
+          name: Nuncia
+          description: A DeepSeek Harness agent exposed over the agent2agent protocol
+          version: 0.1.0
 ```
 
-## 请求级 preset
+Clients may override the preset per request with
+`params.metadata.agentPreset` (alias `preset`).
 
-在 A2A `SendMessage` / `SendStreamingMessage` 请求的 `params.metadata` 中传入 `agentPreset`（或兼容别名 `preset`），即可覆盖全局配置：
+## Endpoints
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "SendMessage",
-  "params": {
-    "message": {
-      "messageId": "req-001",
-      "role": "ROLE_USER",
-      "parts": [{ "text": "你好" }]
-    },
-    "configuration": {
-      "acceptedOutputModes": ["text/plain"]
-    },
-    "metadata": {
-      "agentPreset": "coding"
-    }
-  }
-}
+| method | path | purpose |
+|---|---|---|
+| GET | `/.well-known/agent.json` | AgentCard (skills, capabilities, preset extension) |
+| POST | `/a2a` | A2A JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`, …) |
+| GET | `/{adminPath}/status` | counters + enabled flag (bearer-guarded) |
+| POST | `/{adminPath}/enable\|disable` | runtime switch |
+| GET | `/{metricsPath}` | Prometheus text |
+
+While an agent turn runs, committed assistant messages stream as artifact
+updates; a turn that ends in error publishes `TASK_STATE_FAILED` **with the
+reason in `status.message`** (so a remote caller can diagnose without host
+logs). A DSH approval request publishes `TASK_STATE_INPUT_REQUIRED`; the
+client's next message on the same task resolves it (`allow`/`approve`/`yes`
+→ allowed-once, otherwise rejected).
+
+## Smoke test
+
+```sh
+node test-smoke.mjs   # exit 0 = all pass
 ```
 
-优先级：请求 `metadata.agentPreset` / `metadata.preset` > 全局配置 `agentPreset`。
+Runs the real SDK against a fake DSH context: AgentCard, bearer rejection,
+admin status, a full task lifecycle (agent created → assistant message →
+terminal state), and the counters.
 
-### 调用方如何发现 preset 设置方式
+## Roadmap — authority envelopes (DESIGN §20)
 
-AgentCard 会在 `capabilities.extensions` 中声明 preset 选择扩展：
+Bearer tokens authenticate *connections*; they say nothing about whether a
+remote agent is speaking **for the user**. The planned layer adds signed
+`metadata.authority` envelopes with four levels — `peer` (default), `intent`
+(user intent, bounded by `house` rules), `house` (policy layer, never on the
+wire), `override` (may contradict house, minted only via direct user
+authentication) — with non-transitive grants, drift-on-expiry, and
+fail-down-loud verification. Grants never enter agent-visible memory: the
+plugin wraps outbound messages itself.
 
-```json
-{
-  "uri": "https://dsh.local/a2a/preset-selection",
-  "description": "To select an agent preset for a task, include \"agentPreset\" (or \"preset\") in SendMessage/SendStreamingMessage params.metadata.",
-  "required": false,
-  "params": {
-    "metadataKey": "agentPreset",
-    "aliases": ["preset"],
-    "default": "standard",
-    "presets": ["standard", "router-standard"]
-  }
-}
-```
+Status: not yet implemented in this revision.
 
-调用方读取 AgentCard 即可知道：
+## License
 
-- 在 `params.metadata` 里传 `agentPreset`（或 `preset`）
-- 可用 preset 列表在 `params.presets`
-- 服务端默认 preset 在 `params.default`
-
-## 说明
-
-- 本插件不是 `@deepseek-ai` 官方包，使用无 scope 包名 `dsh-a2a-server`。
-- 只依赖 DSH 官方 `@deepseek-ai/*` 包与 `@a2a-js/sdk`，不依赖其他第三方插件。
-- 构建产物 `lib/index.js` 已自包含打包 `@a2a-js/sdk` 等运行时依赖。
+BSD-3-Clause, as upstream.

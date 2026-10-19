@@ -1,20 +1,22 @@
-# A2A server plugin bundle patch: insert the A2A server bridge into a DSH
-# profile. Override provider/model/port via a higher profile patch as needed.
+# A2A server plugin bundle patch: insert the A2A bridge (dsh-nuncia) into a
+# DSH profile. Override provider/model/port via a higher profile patch as needed.
 
 - insert:
-    - id: a2a-server
-      name: 'dsh-a2a-server'
+    - id: dsh-nuncia
+      name: 'dsh-nuncia'
       config:
         path: /a2a
         agentCardPath: /.well-known/agent.json
         host: 127.0.0.1
         port: 4123
-        cwd: !!js process.cwd()
-        provider: deepseek-official
-        model: deepseek-v4-pro
+        agentPreset: standard
+        auth:
+          type: bearer
+          tokenEnv: NUNCIA_A2A_TOKEN
+        taskTtlMs: 3600000
         agentCard:
-          name: DeepSeek Harness A2A Agent
-          description: A DeepSeek Harness agent exposed over A2A
+          name: Nuncia
+          description: A DeepSeek Harness agent exposed over the Agent2Agent protocol
           url: http://127.0.0.1:4123/a2a
           version: 0.1.0
           capabilities:

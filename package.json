@@ -1,17 +1,14 @@
 {
-  "name": "dsh-a2a-server",
-  "version": "0.1.1",
-  "description": "A2A server bridge plugin for DeepSeek Harness",
+  "name": "dsh-nuncia",
+  "version": "0.1.0",
+  "description": "Authenticated A2A server bridge plugin for DeepSeek Harness (fork of MicroWearld/dsh-a2a-server, ported to a no-build ESM library)",
   "private": true,
   "type": "module",
   "main": "./lib/index.js",
-  "types": "./lib/types/index.d.ts",
   "files": [
     "index.js",
     "lib",
-    "cordis.patch.yml",
-    "scripts/build.sh",
-    "scripts/build.ps1"
+    "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
@@ -19,21 +16,12 @@
     }
   },
   "license": "BSD-3-Clause",
-  "peerDependencies": {
-    "@deepseek-ai/dsh-agent": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-session": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-user-approval": ">=0.0.1-rc <2",
-    "cordis": ">=4.0.0-rc <5",
+  "dependencies": {
+    "@a2a-js/sdk": "^1.3.0",
     "schemastery": "^3.18.0"
   },
-  "devDependencies": {
-    "@types/node": "^24.13.3",
-    "typescript": "^5.9.0"
-  },
   "scripts": {
-    "build": "bash scripts/build.sh",
-    "build:ps1": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  }
+    "check": "node --check lib/index.js && node --check lib/task-store.js"
+  },
+  "_note": "The DSH host uses the @deepseek-ai/schemastery fork (zod-like), NOT the cordis schemastery this config schema imports — so plain schemastery is a real dependency here, not an ambient symlink (device verified 2026-10-19: plain schemastery is absent from the entire DSH global tree). @deepseek-ai/dsh-llm + @deepseek-ai/dsh-session ARE ambient imports, resolved by symlinks into the CLI's node_modules (sylvia-bridge pattern); they must not be installable peers (npm dist-tags satisfy no sane range)."
 }
