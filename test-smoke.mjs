@@ -17,8 +17,14 @@ import { apply } from './lib/index.js'
 const created = []
 const listeners = {}       // event name -> [handler]
 const disposers = []       // effect disposers retained, NOT fired eagerly
+// Host services this plugin reads. `agentDefaultModel` is the real model-binding
+// path: without it a created agent cannot assemble the standard preset's
+// {{model}} persona prefix. Kept injectable so the test proves the resolver.
+const services = {
+  agentDefaultModel: { currentSelection: () => ({ provider: 'smoke-provider', model: 'smoke-model' }) },
+}
 const fakeCtx = {
-  get: () => undefined,    // no webServer / agentPresets / sessionPersistence
+  get: (name) => services[name],   // no webServer / agentPresets / sessionPersistence
   logger: { error: (m) => console.error('[logger.error]', m), warn: (m) => console.error('[logger.warn]', m) },
   on: (name, handler) => { (listeners[name] ??= []).push(handler) },
   effect: (fn, name) => { const d = fn(); disposers.push([name, d]); },
@@ -99,10 +105,24 @@ const task = json?.result?.task ?? json?.result
 check('send 200', res.status === 200)
 check('task completed', task?.status?.state === 'TASK_STATE_COMPLETED', `state=${task?.status?.state}`)
 check('agent created from task', created.length === 1, `meta=${JSON.stringify(created[0]?.meta)}`)
+// The default model must be bound on the created agent, or the standard
+// preset's {{model}} persona prefix cannot assemble.
+check('model resolved from host default', created[0]?.agentOptions?.model === 'smoke-model' && created[0]?.agentOptions?.provider === 'smoke-provider', JSON.stringify(created[0]?.agentOptions))
+
+// 4b. per-request model override (params.metadata.model)
+const res2 = await fetch('http://127.0.0.1:4199/a2a', {
+  method: 'POST',
+  headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', connection: 'close' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'SendMessage', params: { message: { messageId: 'm2', role: 'user', parts: [{ kind: 'text', text: 'pin a model' }] }, metadata: { model: 'pinned-model' } } }),
+})
+const json2 = await res2.json()
+const task2 = json2?.result?.task ?? json2?.result
+check('request metadata overrides model', created[1]?.agentOptions?.model === 'pinned-model' && created[1]?.agentOptions?.provider === 'smoke-provider', JSON.stringify(created[1]?.agentOptions))
+check('override task completed', task2?.status?.state === 'TASK_STATE_COMPLETED', `state=${task2?.status?.state}`)
 
 // 5. counters advanced
 const m2 = await (await fetch('http://127.0.0.1:4199/a2a/admin/status', { headers: { authorization: `Bearer ${TOKEN}`, connection: 'close' } })).json()
-check('metrics advanced', m2.totalTasks === 1 && m2.completedTasks === 1, JSON.stringify({ tasks: m2.totalTasks, done: m2.completedTasks }))
+check('metrics advanced', m2.totalTasks === 2 && m2.completedTasks === 2, JSON.stringify({ tasks: m2.totalTasks, done: m2.completedTasks }))
 
 console.log(failures === 0 ? 'ALL SMOKE PASS' : `SMOKE FAILURES: ${failures}`)
 process.exit(failures === 0 ? 0 : 1)
