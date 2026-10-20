@@ -128,8 +128,14 @@ const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status'
 check('tools registered', registered.length === 2, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'request_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
-check('request_user_intent shape', requestIntent?.parameters?.target?.required === true && typeof requestIntent?.output?.render === 'function')
-check('a2a_send shape', a2aSend?.parameters?.peer?.required === true && typeof a2aSend?.execute === 'function')
+check('request_user_intent shape', requestIntent?.parameters?.required?.includes('target') === true && typeof requestIntent?.output?.render === 'function')
+check('a2a_send shape', a2aSend?.parameters?.required?.includes('peer') === true && a2aSend?.parameters?.required?.includes('text') === true && typeof a2aSend?.execute === 'function')
+// The registry asserts output.schema is a supported JSON Schema; both tools
+// must expose an object-rooted schema with an explicit required list.
+for (const tool of [requestIntent, a2aSend]) {
+	check(`${tool?.name} output schema is object-rooted`, tool?.output?.schema?.type === 'object' && Array.isArray(tool?.output?.schema?.required))
+	check(`${tool?.name} parameters are JSON Schema`, tool?.parameters?.type === 'object' && Array.isArray(tool?.parameters?.required))
+}
 
 // 2. approval granted -> mint happens
 const exec = { agent: { id: 'agent-1' }, callId: 'call-1' }
