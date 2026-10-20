@@ -145,8 +145,8 @@ const TOOL_TOKEN = 'tools-token-123'
 const ADMIN = { authorization: `Bearer ${TOOL_TOKEN}`, 'content-type': 'application/json', connection: 'close' }
 const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status', { headers: ADMIN })).json()
 
-// 1. the four tools registered: two authority, two chatelaine
-check('tools registered', registered.length === 4, `names=${registered.map((t) => t.name).join(',')}`)
+// 1. the five tools registered: two authority, three chatelaine
+check('tools registered', registered.length === 5, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'request_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
 const reportToChatelaine = registered.find((t) => t.name === 'report_to_chatelaine')

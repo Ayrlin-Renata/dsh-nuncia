@@ -92,6 +92,8 @@ give it `host`/`port` and it serves on its own listener.
         auth:
           type: bearer
           tokenEnv: NUNCIA_A2A_TOKEN    # optional: authority derives the bearer
+          # adminToken / adminTokenEnv: an ADDITIONAL accepted bearer (never the
+          # primary). The Sylvia daemon proxies the panel through this one.
         taskTtlMs: 3600000              # completed-task retention
         metricsPath: /metrics           # optional Prometheus text
         adminPath: /a2a/admin           # status / enable / disable
@@ -100,6 +102,9 @@ give it `host`/`port` and it serves on its own listener.
         authority:                      # DESIGN §20 (off by default)
           enabled: true
           nodeName: phone               # this node's name inside envelopes
+          # nodeNameFile: ~/.sylvia/node-names.txt
+          #   newline-delimited names; when nodeName is unset the first boot
+          #   picks one at random and remembers it (P3.0)
           nodeKeyFile: ~/.dsh/nuncia/nuncia-node.key   # Ed25519 private key (0600)
           # nodeKey: '<base64url PKCS8>'  inline alternative for fixed-env hosts
           peers:                        # each peer's PUBLIC key — all verification needs
@@ -127,14 +132,39 @@ give it `host`/`port` and it serves on its own listener.
           name: Nuncia
           description: A DeepSeek Harness agent exposed over the agent2agent protocol
           version: 0.1.0
+          public: false                  # the card is auth-gated (P3.0); true = public
 ```
+
+**The endpoint always speaks A2A, but only to authenticated peers.** A request
+without a valid bearer gets `401 {"error":"unauthorized"}` and never reaches a
+session or an agent. The bearer is resolved as `auth.token` → `auth.tokenEnv` →
+the token derived from the pairing secret (a paired node needs no second
+secret) → **a generated token persisted at `<stateDir>/bearer.token`** — so a
+raw install with no configuration at all is closed from the first second
+instead of wide open. The generated token is printed once at boot.
+
+**The agent card is auth-gated too** (`agentCard.public: false`, the default):
+a card is a discovery surface, so reading it takes the same bearer as speaking
+to the node. It carries only the minimal node identity, in a
+`capabilities.extensions` entry (`https://nuncia.local/a2a/node`): `name`,
+`platform`, `since` (when this process last came up) and `announcement`. Peer
+address memory lives in Sylvia's registry, not here.
 
 **Bearer resolution.** With the authority layer on, the bearer token is derived
 from the pairing secret **and the node name** (`nuncia/bearer:<nodeName>`), so two
 nodes sharing one secret no longer share one literal token. `auth: {type: bearer}`
 is still a complete configuration. Precedence is `auth.token` → `auth.tokenEnv` →
-derived. The secret derives *only* the token: envelope signatures use the node key
+derived → generated. The secret derives *only* the token: envelope signatures use the node key
 (§ Pairing below).
+
+**Node name and announcement.** A node with no configured `authority.nodeName`
+picks one at random from `authority.nodeNameFile` (newline-delimited, `#`
+comments allowed) and remembers it in `<stateDir>/identity.json`; with no file
+it falls back to the hostname. Names are cosmetic — collisions resolve by
+`kid`. The node's **announcement** is one bounded line (≤280 chars) that the
+chatelaine manages through the `set_announcement` tool, and the panel through
+`PUT {adminPath}/announcement` (loopback-only). It is the only free text a
+node publishes: a signboard, not a mailbox.
 
 **Where the secret comes from.** `pairingSecretEnv` wins when that variable is
 exported into the harness process. `pairingSecret` is the inline fallback for
@@ -165,7 +195,7 @@ Clients may override the preset per request with
 
 | method | path | purpose |
 |---|---|---|
-| GET | `/.well-known/agent.json` | AgentCard (skills, capabilities, preset extension) |
+| GET | `/.well-known/agent.json` | AgentCard — **bearer-gated** by default; minimal node identity in an extension |
 | POST | `/a2a` | A2A JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`, …) |
 | GET | `/{adminPath}/status` | counters, live tasks with their authority level, grants, security events (bearer-guarded) |
 | POST | `/{adminPath}/enable\|disable` | runtime switch |
@@ -177,6 +207,8 @@ Clients may override the preset per request with
 | PUT | `/{adminPath}/rules` | `{"rules":"…","summary":"…"}` — written, then auto-committed — **loopback-only** |
 | GET | `/{adminPath}/operators` | operator roster: handle, task, level, scope, expiry — **loopback-only** |
 | POST | `/{adminPath}/operators/prune` | `{"dryRun":true}` sweeps expired operators — **loopback-only** |
+| GET | `/{adminPath}/announcement` | the node's one-line public announcement |
+| PUT | `/{adminPath}/announcement` | `{"announcement":"…"}` — written by the panel or the chatelaine — **loopback-only** |
 | GET | `/{metricsPath}` | Prometheus text |
 
 While an agent turn runs, committed assistant messages stream as artifact
@@ -302,7 +334,7 @@ Rules worth knowing:
 ### Tests
 
 ```sh
-npm test          # everything: unit + all five end-to-end harnesses
+npm test          # everything: unit + all six end-to-end harnesses
 npm run test:unit # unit only (no sockets, no fake harness)
 ```
 
@@ -322,7 +354,9 @@ npm run test:unit # unit only (no sockets, no fake harness)
 | `tests/test-authority-http.mjs` | live HTTP with two keys: intent, **impersonation refused**, unknown origin, bounce, legacy v1, expiry notice |
 | `tests/test-tools.mjs` | registration, approval ladder, auto-attach seen in the peer's body |
 | `tests/test-auth.mjs` | bearer resolution, inline secret vs env precedence |
-| `tests/test-p2.mjs` | operator brief, handles, chatelaine round-trip, question forwarding, abort→CANCELED, expiry prune |
+| 	ests/test-p2.mjs | operator brief, handles, chatelaine round-trip, question forwarding, abort→CANCELED, expiry prune |
+| `tests/test-identity.test.mjs` | name sanitizing, random pick + remember, announcement bounding |
+| `tests/test-p3-auth.mjs` | raw install: generated bearer, 401 without it (card + admin + A2A), minimal card, announcement |
 
 ## Chatelaine (DESIGN §20.11, P2)
 
@@ -397,10 +431,16 @@ Still open:
   turn, `report_to_chatelaine` / `reply_to_operator`, question forwarding,
   per-task 7-day TTL with archive-and-drop pruning, unexpected-end supervision,
   `/status` operator roster. Live on desk and AVD (2026-10-20).
-- **P3 — inter-session + Sylvia glue**: panel mint/revoke/badge buttons,
-  netgate exemption (`allowA2AOnMetered`), remembered peers, toasts.
+- **P3 — Sylvia glue**: panel mint/revoke/badge buttons, netgate exemption
+  (`allowA2AOnMetered`), remembered peers, toasts.
   (The `targetSession` spike pulled forward: chatelaine↔operator reporting is
   already cross-session via `agents.resume` + `inject`, P2.0-B in the plan.)
+  **P3.0 done (2026-10-20)**: the endpoint always requires a bearer (a raw
+  install gets a generated, persisted one), the card is auth-gated and minimal
+  (name/platform/since/announcement), the announcement is chatelaine-managed,
+  and a node without a configured name picks one from the human's list.
+  P3.1–P3.3 remain: session tagging + metered exemption, the daemon proxy and
+  the dashboard card, push notifications.
 - **P4 — hardening**: Noise transport, key rotation/revocation story, EN + ZH READMEs (same
   pattern as the mobile fork), arm64 physical-device run. *Per-node keys landed early*
   (P1.5, v2 envelopes) because the shared-HMAC design could not give verification
