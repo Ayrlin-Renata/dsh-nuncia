@@ -88,6 +88,16 @@ give it `host`/`port` and it serves on its own listener.
         adminPath: /a2a/admin           # status / enable / disable
         persistTasks: true              # durable task files
         persistenceRoot: ./.sessions
+        authority:                      # DESIGN §20 (off by default)
+          enabled: true
+          nodeName: phone               # this node's name inside envelopes
+          pairingSecretEnv: NUNCIA_PAIRING_SECRET   # must be EXPORTED, not just set
+          peers: [desk]                 # allowed inbound origins; empty = any signed origin
+          peerUrls: ['desk=http://192.168.1.20:4123']
+          maxWindowMs: 600000           # hard ceiling for any grant (10 min)
+          grantTtlMs: 300000            # default window when mint omits ttlMs
+          persistGrants: false          # keep windows across restarts
+          tools: true                   # register request_user_intent + a2a_send
         agentCard:
           name: Nuncia
           description: A DeepSeek Harness agent exposed over the agent2agent protocol
@@ -103,8 +113,10 @@ Clients may override the preset per request with
 |---|---|---|
 | GET | `/.well-known/agent.json` | AgentCard (skills, capabilities, preset extension) |
 | POST | `/a2a` | A2A JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`, …) |
-| GET | `/{adminPath}/status` | counters + enabled flag (bearer-guarded) |
+| GET | `/{adminPath}/status` | counters, live tasks with their authority level, grants, security events (bearer-guarded) |
 | POST | `/{adminPath}/enable\|disable` | runtime switch |
+| POST | `/{adminPath}/mint` | mint a grant — **loopback-only** + bearer |
+| POST | `/{adminPath}/revoke` | end a grant by id |
 | GET | `/{metricsPath}` | Prometheus text |
 
 While an agent turn runs, committed assistant messages stream as artifact
@@ -113,6 +125,72 @@ reason in `status.message`** (so a remote caller can diagnose without host
 logs). A DSH approval request publishes `TASK_STATE_INPUT_REQUIRED`; the
 client's next message on the same task resolves it (`allow`/`approve`/`yes`
 → allowed-once, otherwise rejected).
+
+## Authority (DESIGN §20)
+
+A bearer token authenticates a *connection*. It says nothing about whether the
+remote agent is speaking **for the user**. That claim travels only in a signed
+envelope under `params.metadata.authority`; message text is never authority.
+
+### One secret, two capabilities
+
+Paste the same `NUNCIA_PAIRING_SECRET` on both nodes. HKDF derives the bearer
+token and the envelope signing key with independent info strings, so pairing is
+one paste and a leaked token cannot sign.
+
+```sh
+export NUNCIA_PAIRING_SECRET="$(openssl rand -base64 32)"   # generate once, paste on both
+```
+
+`export` matters: a bare `NAME=value` line never reaches the harness process.
+
+### Minting (the user's act)
+
+```sh
+curl -s -X POST http://127.0.0.1:4123/a2a/admin/mint \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"target":"desk","level":"intent","ttlMs":600000,"scope":"housekeeping"}'
+```
+
+The response carries the signed envelope. Minting is **loopback-only** on
+purpose — a bearer token alone would let any paired peer grant itself intent.
+`POST …/revoke {"id":"…"}` ends a window; `GET …/status` lists what is live.
+
+An agent can also ask, through the `request_user_intent` tool: the DSH approval
+prompt *is* the authorization, and nothing is minted unless it answers
+`allowed-once`. On a `danger-full-access` deployment the base bundle sets the
+approval policy to `never`, so that path refuses immediately there — the admin
+endpoint is the working path in that configuration.
+
+### Sending and verifying
+
+`a2a_send` posts to a peer from `authority.peerUrls` and attaches the live grant
+automatically; the agent never handles grant bytes. On the receiving side every
+message is decided independently:
+
+- valid → `intent` / `override`; the jti is recorded and replay on the same link
+  is tolerated;
+- invalid, expired, out of scope, replayed across links, or addressed elsewhere →
+  processed as **`peer`**, counted in `nuncia_authority_rejected_total`, recorded
+  in `/status` `securityEvents`, and emitted as `nuncia/security-event` on the
+  host bus. Never silently, and never an error the caller can retry into a grant.
+
+Rules worth knowing:
+
+- **Per message, not per task.** A lapsed window reverts the *next* message to
+  `peer`; work already issued keeps running (the drift rule).
+- **Responses carry no authority.** A response that claims it is treated as
+  `peer` and reported as `authority-in-response`.
+- **Non-transitive.** An envelope minted *for* a peer is rejected if it comes
+  back inbound (`target-mismatch`).
+- **Revoke ends the local window.** It stops future attachment; a peer that
+  already holds an envelope keeps it until `exp` — which is why windows are short.
+
+### Tests
+
+```sh
+npm test     # 67 unit tests + three end-to-end harnesses (smoke, authority, tools)
+```
 
 ## Smoke test
 
@@ -124,18 +202,33 @@ Runs the real SDK against a fake DSH context: AgentCard, bearer rejection,
 admin status, a full task lifecycle (agent created → assistant message →
 terminal state), and the counters.
 
-## Roadmap — authority envelopes (DESIGN §20)
+## Remaining work (DESIGN §20.7)
 
-Bearer tokens authenticate *connections*; they say nothing about whether a
-remote agent is speaking **for the user**. The planned layer adds signed
-`metadata.authority` envelopes with four levels — `peer` (default), `intent`
-(user intent, bounded by `house` rules), `house` (policy layer, never on the
-wire), `override` (may contradict house, minted only via direct user
-authentication) — with non-transitive grants, drift-on-expiry, and
-fail-down-loud verification. Grants never enter agent-visible memory: the
-plugin wraps outbound messages itself.
+The authority core (P1) is implemented: pairing derivation, envelope
+sign/verify, jti ledger, grants (mint / revoke / expiry / optional persistence),
+inbound fail-down with security events, admin endpoints, `request_user_intent`,
+`a2a_send` with auto-attach, and the AgentCard authority extension — covered by
+67 unit tests plus three end-to-end harnesses.
 
-Status: not yet implemented in this revision.
+Still open:
+
+- **P1 finish** — the live two-node LAN demo (desktop ↔ AVD): L2 honored, an
+  expiring grant drifting back to L1 observable on the wire, revocation
+  mid-conversation.
+- **P2 — Chatelaine layer**: housekeeping workspace, operator handles
+  (`op_<16hex>`), per-task 7-day TTL and pruning, house rules in a tiny git repo,
+  security-event → notification path.
+- **P3 — inter-session + Sylvia glue**: `targetSession` spike, panel
+  mint/revoke/badge buttons, netgate exemption (`allowA2AOnMetered`), remembered
+  peers.
+- **P4 — hardening**: Noise transport, per-node keys, EN + ZH READMEs (same
+  pattern as the mobile fork), arm64 physical-device run.
+
+Design decisions still open (§20.8): the native dialog surface per platform, and
+how the receiving **agent** is told its request arrived with intent. Today the
+level is recorded on the task and exposed in `/status`; it is deliberately not
+injected as prompt text, keeping "grants never enter agent-visible memory"
+literal.
 
 ## License
 

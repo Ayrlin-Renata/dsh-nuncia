@@ -21,7 +21,9 @@
     "schemastery": "^3.18.0"
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/task-store.js"
+    "check": "node --check lib/index.js && node --check lib/task-store.js && node --check lib/authority.js && node --check lib/grants.js && node --check lib/inbound.js && node --check lib/outbound.js",
+    "test": "node --test test-authority.test.mjs test-grants.test.mjs test-inbound.test.mjs test-outbound.test.mjs && node test-smoke.mjs && node test-authority-http.mjs && node test-tools.mjs",
+    "test:unit": "node --test test-authority.test.mjs test-grants.test.mjs test-inbound.test.mjs test-outbound.test.mjs"
   },
   "_note": "The DSH host uses the @deepseek-ai/schemastery fork (zod-like), NOT the cordis schemastery this config schema imports — so plain schemastery is a real dependency here, not an ambient symlink (device verified 2026-10-19: plain schemastery is absent from the entire DSH global tree). @deepseek-ai/dsh-llm + @deepseek-ai/dsh-session ARE ambient imports, resolved by symlinks into the CLI's node_modules (sylvia-bridge pattern); they must not be installable peers (npm dist-tags satisfy no sane range)."
 }
