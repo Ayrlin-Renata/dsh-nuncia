@@ -1,4 +1,4 @@
-import { apply } from './lib/index.js'
+import { apply } from '../lib/index.js'
 // Every probe sends `connection: close` so the server closes sockets after
 // each response — pooled keep-alive sockets at process exit otherwise trip a
 // libuv close-during-close assertion on win32 (the crash seen in smoke v1).

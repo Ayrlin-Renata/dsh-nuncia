@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { ApprovalBroker, DEFAULT_APPROVAL_TIMEOUT_MS } from './lib/approvals.js'
+import { ApprovalBroker, DEFAULT_APPROVAL_TIMEOUT_MS } from '../lib/approvals.js'
 
 function makeBroker(overrides = {}) {
 	const clock = { now: 1_800_000_000_000 }

@@ -26,7 +26,7 @@ import {
 	signEnvelope,
 	validateEnvelope,
 	verifyEnvelope,
-} from './lib/authority.js'
+} from '../lib/authority.js'
 
 const SECRET = 'test-pairing-secret-0123456789'
 const KEY = deriveAuthorityKey(SECRET)

@@ -10,8 +10,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { deriveAuthorityKey, verifyEnvelope } from './lib/authority.js'
-import { DEFAULT_TTL_MS, GrantStore } from './lib/grants.js'
+import { deriveAuthorityKey, verifyEnvelope } from '../lib/authority.js'
+import { DEFAULT_TTL_MS, GrantStore } from '../lib/grants.js'
 
 const SECRET = 'grant-test-secret-0123456789'
 const KEY = deriveAuthorityKey(SECRET)

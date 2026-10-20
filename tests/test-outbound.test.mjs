@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 
-import { carriesAuthorityClaim, createOutboundClient, extractTaskText, parsePeerUrls } from './lib/outbound.js'
+import { carriesAuthorityClaim, createOutboundClient, extractTaskText, parsePeerUrls } from '../lib/outbound.js'
 
 /** Start a peer that records requests and answers with `reply`. */
 async function startPeer(reply) {

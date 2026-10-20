@@ -14,8 +14,8 @@
  * Run: node test-authority-http.mjs   (exit 0 = all pass)
  */
 
-import { createEnvelope, deriveAuthorityKey, verifyEnvelope } from './lib/authority.js'
-import { apply, isLoopbackRequest } from './lib/index.js'
+import { createEnvelope, deriveAuthorityKey, verifyEnvelope } from '../lib/authority.js'
+import { apply, isLoopbackRequest } from '../lib/index.js'
 
 const SECRET = 'authority-test-secret-0123456789'
 process.env.NUNCIA_TEST_TOKEN = 'authority-token-123'

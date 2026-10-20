@@ -7,8 +7,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createEnvelope, deriveAuthorityKey } from './lib/authority.js'
-import { SecurityLog, claimedLevel, createAuthorityGate } from './lib/inbound.js'
+import { createEnvelope, deriveAuthorityKey } from '../lib/authority.js'
+import { SecurityLog, claimedLevel, createAuthorityGate } from '../lib/inbound.js'
 
 const SECRET = 'inbound-test-secret-0123456789'
 const KEY = deriveAuthorityKey(SECRET)

@@ -27,9 +27,15 @@ metrics all originate there — thank you for a solid base. This fork differs:
 ```
 index.js            bundle entry — re-exports lib/index.js for DSH patches
 lib/index.js        the plugin (plain ESM)
+lib/authority.js    HKDF derivation, canonical envelope sign/verify, jti ledger
+lib/grants.js       grant store (mint/revoke/envelopeFor, read-time expiry)
+lib/inbound.js      fail-down gate + bounded security log
+lib/outbound.js     peer client that attaches live grants
+lib/notices.js      agent-facing authority notices (facts, never grant bytes)
+lib/approvals.js    approval broker (queue for hosts with no prompt surface)
 lib/task-store.js   file-backed A2A Task store (write-chained JSON)
 cordis.patch.yml    default profile patch (inserts the plugin)
-test-smoke.mjs      standalone smoke test (fake ctx, real SDK)
+tests/              unit tests + end-to-end harnesses (npm test)
 ```
 
 ## Install
@@ -82,7 +88,7 @@ give it `host`/`port` and it serves on its own listener.
         model: deepseek-v4-pro          # optional model name
         auth:
           type: bearer
-          tokenEnv: NUNCIA_A2A_TOKEN    # or `token:` literal
+          tokenEnv: NUNCIA_A2A_TOKEN    # optional: authority derives the bearer
         taskTtlMs: 3600000              # completed-task retention
         metricsPath: /metrics           # optional Prometheus text
         adminPath: /a2a/admin           # status / enable / disable
@@ -91,7 +97,8 @@ give it `host`/`port` and it serves on its own listener.
         authority:                      # DESIGN §20 (off by default)
           enabled: true
           nodeName: phone               # this node's name inside envelopes
-          pairingSecretEnv: NUNCIA_PAIRING_SECRET   # must be EXPORTED, not just set
+          pairingSecretEnv: NUNCIA_PAIRING_SECRET   # preferred: EXPORTED, not just set
+          pairingSecret: '…'            # fallback: inline, for hosts you cannot re-env
           peers: [desk]                 # allowed inbound origins; empty = any signed origin
           peerUrls: ['desk=http://192.168.1.20:4123']
           maxWindowMs: 600000           # hard ceiling for any grant (10 min)
@@ -103,6 +110,18 @@ give it `host`/`port` and it serves on its own listener.
           description: A DeepSeek Harness agent exposed over the agent2agent protocol
           version: 0.1.0
 ```
+
+**Bearer resolution.** With the authority layer on, the bearer token is derived
+from the pairing secret, so `auth: {type: bearer}` is a complete configuration —
+the same secret that signs envelopes also authenticates the endpoint. Precedence
+is `auth.token` → `auth.tokenEnv` → derived. A paired node therefore needs one
+paste, not two; `tokenEnv` remains useful for nodes that are *not* paired.
+
+**Where the secret comes from.** `pairingSecretEnv` wins when that variable is
+exported into the harness process. `pairingSecret` is the inline fallback for
+hosts whose environment is fixed at launch (a GUI app), where the alternative is
+restarting the whole session to pair a node. A secret in a profile file is only
+as private as that file — prefer the environment when you can export it.
 
 Clients may override the preset per request with
 `params.metadata.agentPreset` (alias `preset`).
@@ -217,13 +236,27 @@ Rules worth knowing:
 ### Tests
 
 ```sh
-npm test     # 82 unit tests + three end-to-end harnesses (smoke, authority, tools)
+npm test          # everything: unit + all four end-to-end harnesses
+npm run test:unit # unit only (no sockets, no fake harness)
 ```
+
+| file | covers |
+|---|---|
+| `tests/test-authority.test.mjs` | derivation, canonical encoding, per-field tamper, expiry/skew/window, binding, jti ledger |
+| `tests/test-grants.test.mjs` | mint/revoke, validation, read-time expiry, envelope preference, persistence tamper + rotation |
+| `tests/test-inbound.test.mjs` | fail-down reasons, allowlist, same-link replay, no signature echo |
+| `tests/test-outbound.test.mjs` | grant attachment, unknown peer, non-200, response authority claims |
+| `tests/test-notices.test.mjs` | notice wording, remaining-time, no grant material |
+| `tests/test-approvals.test.mjs` | broker decisions, expiry fail-closed, cancel-on-unload |
+| `tests/test-smoke.mjs` | the real SDK against a fake ctx: card, auth, task lifecycle |
+| `tests/test-authority-http.mjs` | live HTTP: mint → send → tamper → fail down → revoke → expiry notice |
+| `tests/test-tools.mjs` | registration, approval ladder, auto-attach seen in the peer's body |
+| `tests/test-auth.mjs` | bearer resolution, inline secret vs env precedence |
 
 ## Smoke test
 
 ```sh
-node test-smoke.mjs   # exit 0 = all pass
+node tests/test-smoke.mjs   # exit 0 = all pass
 ```
 
 Runs the real SDK against a fake DSH context: AgentCard, bearer rejection,
@@ -236,7 +269,7 @@ The authority core (P1) is implemented: pairing derivation, envelope
 sign/verify, jti ledger, grants (mint / revoke / expiry / optional persistence),
 inbound fail-down with security events, admin endpoints, `request_user_intent`,
 `a2a_send` with auto-attach, and the AgentCard authority extension — covered by
-67 unit tests plus three end-to-end harnesses.
+82 unit tests plus four end-to-end harnesses.
 
 Still open:
 

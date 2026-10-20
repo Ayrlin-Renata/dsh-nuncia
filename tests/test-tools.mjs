@@ -16,7 +16,7 @@
 
 import { createServer } from 'node:http'
 
-import { apply } from './lib/index.js'
+import { apply } from '../lib/index.js'
 
 process.env.NUNCIA_TEST_TOKEN = 'tools-token-123'
 process.env.NUNCIA_TEST_SECRET = 'tools-test-secret-0123456789'

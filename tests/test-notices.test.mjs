@@ -11,7 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { authorityRejectedNotice, describeRemaining, intentGrantedNotice, intentLapsedNotice } from './lib/notices.js'
+import { authorityRejectedNotice, describeRemaining, intentGrantedNotice, intentLapsedNotice } from '../lib/notices.js'
 
 const NOW = 1_800_000_000_000
 
