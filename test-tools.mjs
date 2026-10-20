@@ -54,6 +54,8 @@ const registered = []
 const listeners = {}
 let approvalOutcome = 'allowed-once'
 let approvalRequests = []
+let questionsMode = 'absent'
+const questionsCalls = []
 
 const fakeCtx = {
 	get: (name) => {
@@ -62,6 +64,18 @@ const fakeCtx = {
 				request: async (request) => {
 					approvalRequests.push(request)
 					return approvalOutcome
+				},
+			}
+		}
+		if (name === 'userQuestions' && questionsMode !== 'absent') {
+			return {
+				// Shape mirrors dsh-user-questions@0.2.1-alpha.5.askTimed:
+				// resolve with { answers: [...] } or { pending: true, callId }.
+				askTimed: async (request, callId, timeoutMs) => {
+					questionsCalls.push({ request, callId, timeoutMs })
+					if (questionsMode === 'allow') return { answers: [{ id: 'nuncia-intent', selected: ['Allow once'] }] }
+					if (questionsMode === 'deny') return { answers: [{ id: 'nuncia-intent', selected: ['Deny'] }] }
+					return { pending: true, callId }
 				},
 			}
 		}
@@ -164,15 +178,27 @@ try {
 check('rejection mints nothing', (await status()).authority.grants.length === before)
 check('rejection explains itself', /did not approve \(rejected\)/.test(refusedError), refusedError)
 
-// 5. unavailable approval gives actionable guidance
+// 5. no host approval surface: the request is QUEUED for a human rather than
+//    silently refused, and a decision through the admin endpoint settles it.
+//    (This is the real `danger-full-access` semantics: host approval answers
+//    `rejected` policy-side, so the broker is the surface that reaches a human.)
 approvalOutcome = 'missing'
-let unavailableError = ''
-try {
-	await requestIntent.execute({ target: 'desk' }, exec)
-} catch (error) {
-	unavailableError = error.message
+const queuedPromise = requestIntent.execute({ target: 'desk' }, exec)
+	.then(() => null)
+	.catch((error) => error)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const pendingList = await (await fetch('http://127.0.0.1:4202/a2a/admin/requests', { headers: ADMIN })).json()
+const missingHost = (pendingList.pending ?? []).find((r) => r.target === 'desk')
+check('missing host queues a request', typeof missingHost?.id === 'string', JSON.stringify(pendingList).slice(0, 240))
+let missingHostError = ''
+if (missingHost) {
+	await fetch('http://127.0.0.1:4202/a2a/admin/requests/decide', {
+		method: 'POST', headers: ADMIN,
+		body: JSON.stringify({ id: missingHost.id, decision: 'rejected' }),
+	})
+	missingHostError = (await queuedPromise)?.message ?? ''
 }
-check('missing approval guidance', /a2a\/admin\/mint/.test(unavailableError), unavailableError)
+check('queued refusal is explained', /did not approve \(rejected\)/.test(missingHostError), missingHostError)
 
 // 6. unknown peer error lists what is known
 let peerError = ''
@@ -182,6 +208,51 @@ try {
 	peerError = error.message
 }
 check('unknown peer names the roster', /Known peers: desk/.test(peerError), peerError)
+
+// 7. live Web-UI question card grants in broker mode without touching the
+//    broker queue (a connected composer beats an idle admin queue)
+questionsMode = 'allow'
+const cardGranted = await requestIntent.execute({ target: 'desk', scope: 'ui-test' }, exec)
+check('question card grants', cardGranted.granted === true, JSON.stringify(cardGranted))
+// The host approval seam is consulted first in `auto` mode, but it answers a
+// policy string (`rejected` under `never`), never a human decision — the card
+// is what settles the call, so no *new* broker request should have been queued.
+const queuedAfterCard = (await (await fetch('http://127.0.0.1:4202/a2a/admin/requests', { headers: ADMIN })).json()).pending ?? []
+check('card path queues no broker request', queuedAfterCard.length === 0, JSON.stringify(queuedAfterCard).slice(0, 200))
+check('askTimed got the bounded timeout', questionsCalls.length === 1 && questionsCalls[0].timeoutMs === 120000, JSON.stringify(questionsCalls[0] ?? {}))
+check('card question names the target', questionsCalls[0]?.request?.questions?.[0]?.question?.includes('desk') === true, questionsCalls[0]?.request?.questions?.[0]?.question)
+
+// 8. denial on the card mints nothing
+questionsMode = 'deny'
+let cardRefusal = ''
+try {
+	await requestIntent.execute({ target: 'desk' }, exec)
+} catch (error) {
+	cardRefusal = error.message
+}
+check('card denial refuses', /did not approve \(rejected\)/.test(cardRefusal), cardRefusal)
+
+// 9. pending card falls through to the broker, whose decision can still be
+//    filed late through the admin endpoint
+questionsMode = 'pending'
+let pendingDecisionError = ''
+const pendingPromise = requestIntent.execute({ target: 'desk' }, exec)
+	.catch((error) => error)
+await new Promise((resolve) => setTimeout(resolve, 60))
+const listed = await (await fetch('http://127.0.0.1:4202/a2a/admin/requests', { headers: ADMIN })).json()
+const queued = (listed.pending ?? []).find((r) => r.target === 'desk')
+check('pending card queued in broker', typeof queued?.id === 'string', JSON.stringify(listed).slice(0, 200))
+if (queued) {
+	const decided = await fetch('http://127.0.0.1:4202/a2a/admin/requests/decide', {
+		method: 'POST', headers: ADMIN,
+		body: JSON.stringify({ id: queued.id, decision: 'allowed-once' }),
+	})
+	check('late admin decision accepted', decided.status === 200, `status=${decided.status}`)
+	const settled = await pendingPromise
+	check('late decision mints the grant', settled?.granted === true, JSON.stringify(settled ?? String(pendingDecisionError)))
+} else {
+	await pendingPromise.catch((error) => { pendingDecisionError = error.message })
+}
 
 peerServer.close()
 // Give the peer socket and any undici bookkeeping a moment to settle before

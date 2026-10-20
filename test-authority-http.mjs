@@ -27,6 +27,7 @@ const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/js
 
 const created = []
 const listeners = {}
+const injected = []
 const services = {
   agentDefaultModel: { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) },
 }
@@ -56,6 +57,7 @@ const fakeCtx = {
           })
         },
         cancel: () => {},
+        inject: (message) => { injected.push(message) },
         whenIdle: async () => { if (pendingTurn) await pendingTurn },
       }
       return { agent, dispose: async () => {} }
@@ -76,6 +78,7 @@ await apply(fakeCtx, {
     pairingSecretEnv: 'NUNCIA_TEST_SECRET',
     peers: ['desk'],
     maxWindowMs: 10 * 60 * 1000,
+    noticeSweepMs: 150,
   },
 })
 
@@ -166,6 +169,12 @@ check('task recorded as intent', goodTask?.authority?.level === 'intent', JSON.s
 check('task recorded scope', goodTask?.authority?.scope === 'housekeeping')
 check('no rejections yet', s1.authorityRejected === 0, `rejected=${s1.authorityRejected}`)
 
+// The chatelaine is told a window opened — facts and a time bound, no grant bytes.
+const noticeTexts = () => injected.map((m) => m.content?.[0]?.text ?? '')
+const grantedNotice = noticeTexts().find((t) => t.includes('verified user intent'))
+check('intent notice injected', grantedNotice !== undefined && grantedNotice.includes('peer "desk"'), grantedNotice?.split('\n')[0])
+check('intent notice has no grant material', grantedNotice !== undefined && !/\bsig\b|jti|envelope/i.test(grantedNotice))
+
 // 5. same-link replay is tolerated (a retrying client is not an attacker)
 const replay = await send('replay', { authority: inbound }, 3)
 check('same-link replay tolerated', replay.task?.status?.state === 'TASK_STATE_COMPLETED')
@@ -191,6 +200,23 @@ check('bounced envelope completes as peer', bounced.task?.status?.state === 'TAS
 const s3 = await status()
 check('bounced envelope rejected', s3.authorityRejected === s3before.authorityRejected + 1, `rejected=${s3.authorityRejected}`)
 check('bounced reason is target', s3.authority.securityEvents[0]?.reason === 'target-mismatch', JSON.stringify(s3.authority.securityEvents[0]))
+
+// 6c. a rejected claim is announced to the agent (fail down, notify loud)
+const rejectionNotice = noticeTexts().find((t) => t.includes('did not verify'))
+check('rejection notice injected', rejectionNotice !== undefined, rejectionNotice?.split('\n')[0])
+
+// 6d. a lapsed window is announced even when no further message arrives
+const shortIat = Date.now()
+const shortLived = createEnvelope(
+  { level: 'intent', origin: 'desk', target: 'phone', iat: shortIat, exp: shortIat + 900, jti: 'inbound-jti-short1' },
+  KEY,
+)
+const shortSend = await send('short window', { authority: shortLived }, 6)
+check('short-window send accepted', shortSend.task?.status?.state === 'TASK_STATE_COMPLETED')
+await new Promise((resolve) => setTimeout(resolve, 1600))
+const lapseNotice = noticeTexts().find((t) => t.includes('window from peer "desk" has ended'))
+check('expiry notice injected without a new message', lapseNotice !== undefined, lapseNotice?.split('\n')[0])
+check('expiry notice drops the peer to peer', lapseNotice !== undefined && /arrive as "peer"/.test(lapseNotice))
 
 // 7. revoke ends the local window
 const revokeRes = await fetch(`${BASE}/a2a/admin/revoke`, {

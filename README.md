@@ -117,6 +117,8 @@ Clients may override the preset per request with
 | POST | `/{adminPath}/enable\|disable` | runtime switch |
 | POST | `/{adminPath}/mint` | mint a grant — **loopback-only** + bearer |
 | POST | `/{adminPath}/revoke` | end a grant by id |
+| GET | `/{adminPath}/requests` | pending approvals with the id a surface needs to decide — **loopback-only** |
+| POST | `/{adminPath}/requests/decide` | `{"id":"…","decision":"allowed-once"\|"rejected"\|"cancelled"}` — **loopback-only** |
 | GET | `/{metricsPath}` | Prometheus text |
 
 While an agent turn runs, committed assistant messages stream as artifact
@@ -156,11 +158,37 @@ The response carries the signed envelope. Minting is **loopback-only** on
 purpose — a bearer token alone would let any paired peer grant itself intent.
 `POST …/revoke {"id":"…"}` ends a window; `GET …/status` lists what is live.
 
-An agent can also ask, through the `request_user_intent` tool: the DSH approval
-prompt *is* the authorization, and nothing is minted unless it answers
-`allowed-once`. On a `danger-full-access` deployment the base bundle sets the
-approval policy to `never`, so that path refuses immediately there — the admin
-endpoint is the working path in that configuration.
+An agent can also ask, through the `request_user_intent` tool — see
+[Asking](#asking-the-agents-act) for the three surfaces it tries and why the
+admin endpoint is not the only one.
+
+### Asking (the agent's act)
+
+`request_user_intent` never mints on its own: it asks a human first, trying up
+to three surfaces in order, and **anything other than `allowed-once` is a
+refusal**. Missing surfaces fail closed — never an implicit yes.
+
+| order | surface | when it answers |
+|---|---|---|
+| 1 | `ctx.approval.request` | policy allows prompting (`auto` mode). Under `danger-full-access` the policy is `never`, so this returns `rejected` without asking — dead there by design |
+| 2 | `ctx.userQuestions.askTimed` | a Web UI client is attached to the live root agent. **This is the one prompt surface that survives `danger-full-access`** — the `user-questions/request` waterfall is independent of the approval policy |
+| 3 | ApprovalBroker | headless, no client, or the card went unanswered — the request is queued and any surface decides it (panel via `…/requests`, `approveCommand` hook) |
+
+`authority.approval` picks the ladder: `broker` (queue), `host` (seams only,
+`unavailable` if neither answers), `auto` (seam → card → `unavailable`). The
+card is asked for 120 s; a `{pending:true}` answer falls through instead of
+hanging the turn, which matters because `ask()` with no connected client pends
+forever. Identity gates are the host's: only the live **root** agent can ask, so
+a subagent cannot mint authority for itself.
+
+`approveCommand` receives `NUNCIA_APPROVAL_ID` and `NUNCIA_APPROVAL_REASON` in
+its environment — that is the hook for a Termux notification, a panel button, or
+anything scriptable that POSTs the decision back. Requests expire (2 min) and
+resolve `timeout`; unload resolves `cancelled`.
+
+Whatever the outcome, the *agent* is told about windows it can use — a notice is
+injected when a window opens, when it lapses, and when a claim is bounced. Those
+notices carry level, peer, scope and remaining time, never grant bytes.
 
 ### Sending and verifying
 
@@ -189,7 +217,7 @@ Rules worth knowing:
 ### Tests
 
 ```sh
-npm test     # 67 unit tests + three end-to-end harnesses (smoke, authority, tools)
+npm test     # 82 unit tests + three end-to-end harnesses (smoke, authority, tools)
 ```
 
 ## Smoke test
@@ -224,11 +252,12 @@ Still open:
 - **P4 — hardening**: Noise transport, per-node keys, EN + ZH READMEs (same
   pattern as the mobile fork), arm64 physical-device run.
 
-Design decisions still open (§20.8): the native dialog surface per platform, and
-how the receiving **agent** is told its request arrived with intent. Today the
-level is recorded on the task and exposed in `/status`; it is deliberately not
-injected as prompt text, keeping "grants never enter agent-visible memory"
-literal.
+Design decisions still open (§20.8): the native dialog surface per platform.
+The second one — how the receiving **agent** learns its request arrived with
+intent — is now answered: the level is recorded on the task, exposed in
+`/status`, and announced to the agent as a notice carrying level, peer, scope
+and remaining time (level and expiry, never grant bytes). A grant is therefore
+visible as *authority it already has*, not as a token it could replay.
 
 ## License
 
