@@ -103,7 +103,6 @@ const card = await cardResp.json()
 check('the card with a bearer is served', cardResp.status === 200, `status=${cardResp.status}`)
 const nodeExt = (card.capabilities?.extensions ?? []).find((ext) => ext.uri === 'https://nuncia.local/a2a/node')
 check('the card carries the minimal node fields', nodeExt?.params?.name !== undefined && nodeExt?.params?.platform !== undefined && nodeExt?.params?.announcement !== undefined, JSON.stringify(nodeExt?.params))
-
 // 3. The admin surface is guarded as well.
 const adminNoAuth = await fetch(`http://127.0.0.1:${PORT}/a2a/admin/status`, { headers: { connection: 'close' } })
 check('the admin surface without a bearer is refused', adminNoAuth.status === 401, `status=${adminNoAuth.status}`)
@@ -125,7 +124,13 @@ const nodeExt2 = (card2.capabilities?.extensions ?? []).find((ext) => ext.uri ==
 check('the announcement shows on the card', nodeExt2?.params?.announcement === 'Reindexing the house rules', JSON.stringify(nodeExt2?.params?.announcement))
 
 console.log(failures === 0 ? 'ALL P3-AUTH PASS' : `P3-AUTH FAILURES: ${failures}`)
-// NOTE: no exit-hook disposal — firing server.close() during process exit trips
-// a libuv close-during-close assertion on win32 (the same trip we hit in smoke
-// v1). The OS reclaims the port when the process dies.
-process.exit(failures === 0 ? 0 : 1)
+// Close the plugin's HTTP server BEFORE exiting. Leaving it open and letting
+// process.exit() tear it down trips a win32 libuv close-during-close
+// assertion ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)"): the
+// socket closes while its handle is already closing. Awaiting the disposers
+// and letting the event loop drain naturally is the clean way out — no
+// process.exit() at all, so the runtime can finish its own teardown.
+for (const dispose of disposers) {
+  try { await dispose?.() } catch { /* the harness does not care */ }
+}
+process.exitCode = failures === 0 ? 0 : 1

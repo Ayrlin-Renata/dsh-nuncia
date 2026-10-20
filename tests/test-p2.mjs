@@ -143,6 +143,11 @@ check('operator attached to the housekeeping workspace', attached.includes(opera
 // --- 2. chatelaine adopted + told about contact -----------------------------
 const chatelaineSession = created.find((entry) => entry.options.meta?.cwd === HOUSE && entry.id !== operatorSession?.id)
 check('chatelaine session adopted once', chatelaineSession !== undefined, created.map((entry) => entry.id).join(','))
+// P3.1: both session kinds carry the durable A2A tag in their SESSION ID (the
+// v4 session header accepts only `origin: "subagent"`, so the id is the
+// carrier) — the metered gate can still recognise them after a restart.
+check('operator session is tagged as A2A', operatorSession?.id?.startsWith('a2a-op-') === true, operatorSession?.id)
+check('chatelaine session is tagged as A2A', chatelaineSession?.id?.startsWith('a2a-chatelaine-') === true, chatelaineSession?.id)
 const chatelaineDeliveries = () => deliveries.filter((delivery) => delivery.sessionId === chatelaineSession?.id)
 check('contact reported to the chatelaine', chatelaineDeliveries().some((delivery) => /^Contact: .* opened task/.test(delivery.text)), JSON.stringify(chatelaineDeliveries().map((delivery) => delivery.text.slice(0, 40))))
 
@@ -156,7 +161,9 @@ check('report_to_chatelaine delivers', reported.delivered === true, JSON.stringi
 check('report landed in the chatelaine session', chatelaineDeliveries().some((delivery) => delivery.text.includes('about to touch files')))
 
 const replied = await replyTool.execute({ handle: task1.metadata.handle, message: 'approved, go ahead' }, { agent: { id: chatelaineSession.id } })
-check('reply_to_operator delivers', replied.delivered === true && replied.taskId === operatorSession.id, JSON.stringify(replied))
+// The reply names the TASK (the record key), while the session it lands in is
+// the tagged operator session.
+check('reply_to_operator delivers', replied.delivered === true && replied.taskId === task1.id, JSON.stringify(replied))
 check('reply landed in the operator session', operatorDeliveries().some((delivery) => delivery.kind === 'followup' && delivery.text.includes('approved, go ahead')))
 
 // --- 4. question forwarding -------------------------------------------------
