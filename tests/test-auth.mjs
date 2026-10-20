@@ -122,7 +122,28 @@ const derivedRejected = await fetch('http://127.0.0.1:4206/a2a/admin/status', {
 })
 check('derived bearer is NOT accepted when a token is pinned', derivedRejected.status === 401, `status=${derivedRejected.status}`)
 
-// --- 3. unpaired + missing env is still a loud configuration error ----------
+// --- 3. mount: standalone ignores an available web server -------------------
+// A node whose peers use a stable advertised address must actually serve on it;
+// mounting on the harness port makes agentCard.url a lie.
+const registeredOnHost = []
+const hostWithWebServer = fakeCtx()
+hostWithWebServer.get = (name) => (name === 'webServer'
+	? { register: (route) => { registeredOnHost.push(route.path); return () => {} } }
+	: undefined)
+await apply(hostWithWebServer, {
+	...base,
+	port: 4209,
+	mount: 'standalone',
+	auth: { type: 'bearer' },
+	authority: { enabled: true, nodeName: 'desk', pairingSecret: SECRET },
+})
+check('mount standalone registers nothing on the host server', registeredOnHost.length === 0, JSON.stringify(registeredOnHost))
+const ownPort = await fetch('http://127.0.0.1:4209/a2a/admin/status', {
+	headers: { authorization: 'Bearer ' + derived, connection: 'close' },
+})
+check('mount standalone binds its own port', ownPort.status === 200, `status=${ownPort.status}`)
+
+// --- 4. unpaired + missing env is still a loud configuration error ----------
 delete process.env.NUNCIA_ABSENT_TOKEN
 let refused = ''
 try {
