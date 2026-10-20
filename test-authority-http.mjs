@@ -174,6 +174,11 @@ const noticeTexts = () => injected.map((m) => m.content?.[0]?.text ?? '')
 const grantedNotice = noticeTexts().find((t) => t.includes('verified user intent'))
 check('intent notice injected', grantedNotice !== undefined && grantedNotice.includes('peer "desk"'), grantedNotice?.split('\n')[0])
 check('intent notice has no grant material', grantedNotice !== undefined && !/\bsig\b|jti|envelope/i.test(grantedNotice))
+// The v4 session format REFUSES the retired `kind: 'plugin'` wrapper and the
+// rejected write fails the whole turn (seen live on the AVD: a rejected
+// envelope turned into a failed task). Producer-owned kind or nothing.
+const noticeSources = () => injected.map((m) => m.source?.kind)
+check('notice source is producer-owned', noticeSources().every((k) => k === 'plugin:dsh-nuncia'), JSON.stringify(noticeSources()))
 
 // 5. same-link replay is tolerated (a retrying client is not an attacker)
 const replay = await send('replay', { authority: inbound }, 3)
