@@ -233,7 +233,8 @@ test('non-objects and wrong versions are rejected without throwing', () => {
 		assert.equal(result.ok, false)
 		assert.equal(result.reason, 'malformed')
 	}
-	assert.equal(validateEnvelope({ ...validEnvelope(), v: 2 }).reason, 'version')
+	// A v2 body needs a `kid`: the version alone does not identify a key.
+	assert.equal(validateEnvelope({ ...validEnvelope(), v: 2 }).reason, 'malformed')
 	assert.equal(validateEnvelope({ ...validEnvelope(), v: ENVELOPE_VERSION + 1 }).reason, 'version')
 })
 

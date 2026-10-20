@@ -13,6 +13,10 @@
  * Run: node tests/test-auth.test.mjs   (exit 0 = all pass)
  */
 
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { apply } from '../lib/index.js'
 import { deriveBearerToken } from '../lib/authority.js'
 
@@ -21,6 +25,9 @@ const check = (name, cond, detail = '') => {
 	console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`)
 	if (!cond) failures++
 }
+
+// Keys and grants must not land in the repo: give every apply() a scratch dir.
+const STATE = mkdtempSync(join(tmpdir(), 'nuncia-auth-'))
 
 const SECRET = 'inline-secret-0123456789-abcdefghij'
 const ENV_SECRET = 'env-secret-different-value-9876543210'
@@ -47,6 +54,8 @@ const base = {
 	host: '127.0.0.1',
 	agentPreset: 'standard',
 	taskTtlMs: 60000,
+	// Node keys and grant files belong in scratch space, never in the repo.
+	persistenceRoot: STATE,
 }
 
 // --- 1. inline secret + tokenless auth entirely derives the bearer -----------
@@ -62,8 +71,8 @@ await apply(fakeCtx(), {
 	},
 })
 
-const derived = deriveBearerToken(SECRET)
-const wrong = deriveBearerToken('some-other-secret-entirely')
+const derived = deriveBearerToken(SECRET, 'desk')
+const wrong = deriveBearerToken('some-other-secret-entirely', 'desk')
 
 const unauth = await fetch('http://127.0.0.1:4205/a2a/admin/status', { headers: { connection: 'close' } })
 check('endpoint still requires a bearer', unauth.status === 401, `status=${unauth.status}`)
@@ -96,7 +105,7 @@ await apply(fakeCtx(), {
 		pairingSecretEnv: 'NUNCIA_TEST_SECRET',
 	},
 })
-const envDerived = deriveBearerToken(ENV_SECRET)
+const envDerived = deriveBearerToken(ENV_SECRET, 'desk')
 const fromEnv = await fetch('http://127.0.0.1:4208/a2a/admin/status', {
 	headers: { authorization: 'Bearer ' + envDerived, connection: 'close' },
 })
@@ -161,3 +170,4 @@ check('missing token with authority off is explained', /NUNCIA_ABSENT_TOKEN is e
 await new Promise((resolve) => setTimeout(resolve, 250))
 console.log(failures === 0 ? 'ALL AUTH PASS' : `AUTH FAILURES: ${failures}`)
 process.exit(failures === 0 ? 0 : 1)
+

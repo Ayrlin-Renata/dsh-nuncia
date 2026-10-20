@@ -4,3 +4,6 @@ node_modules/
 # NOTE: lib/ is intentionally NOT ignored — the port has no build step, so
 # lib/index.js + lib/task-store.js ARE the shipped plugin (the TS sources in
 # src/ are kept for reference only).
+nuncia-node.key
+*.key
+

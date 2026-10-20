@@ -17,7 +17,9 @@ const NOW = 1_800_000_000_000
 function gate(overrides = {}) {
 	let clock = { now: NOW }
 	const g = createAuthorityGate({
-		key: KEY,
+		// These cases exercise the legacy v1 path; v2 has its own suite
+		// (test-inbound-v2.test.mjs) where keys are asymmetric.
+		legacyKey: KEY,
 		nodeName: 'phone',
 		now: () => clock.now,
 		...overrides,

@@ -1,5 +1,10 @@
 # A2A server plugin bundle patch: insert the A2A bridge (dsh-nuncia) into a
 # DSH profile. Override provider/model/port via a higher profile patch as needed.
+#
+# Authority (DESIGN §20) is OFF in this template: enable it only after both
+# nodes have exchanged public keys (README § Pairing). A node with
+# `enabled: true` but no peers still serves normal `peer` traffic — it just
+# never honours an authority envelope.
 
 - insert:
     - id: dsh-nuncia
@@ -12,8 +17,22 @@
         agentPreset: standard
         auth:
           type: bearer
+          # With authority enabled the bearer is derived (per node name) from
+          # the pairing secret, so this line can stay absent on paired nodes.
           tokenEnv: NUNCIA_A2A_TOKEN
         taskTtlMs: 3600000
+        # authority:
+        #   enabled: true
+        #   nodeName: phone
+        #   nodeKeyFile: ~/.dsh/nuncia/nuncia-node.key   # generated 0600 on first boot
+        #   # nodeKey: '<base64url PKCS8>'               # inline, for fixed-env hosts
+        #   peers:
+        #     - name: desk
+        #       publicKey: '<run bin/nuncia-identity.js on the peer, paste its key>'
+        #       kid: '<16 chars — pins the key; boot fails on mismatch>'
+        #   allowV1: true                                # migration window only
+        #   pairingSecretEnv: NUNCIA_PAIRING_SECRET      # derives the bearer only
+        #   peerUrls: [ 'desk=http://192.168.1.20:4123' ]
         agentCard:
           name: Nuncia
           description: A DeepSeek Harness agent exposed over the Agent2Agent protocol

@@ -18,7 +18,7 @@ metrics all originate there — thank you for a solid base. This fork differs:
 | build | TypeScript + `dsh-super-injector` scaffold, needs a full DSH monorepo checkout (`DSH_CHECKOUT`) to compile and bundle | **no build step** — `lib/` is hand-ported plain ESM, installed as-is |
 | protocol lib | bundled into `lib/index.js` | `@a2a-js/sdk` as a normal npm dependency |
 | name | `dsh-a2a-server` | `dsh-nuncia` (metrics: `nuncia_*`) |
-| authority | bearer token only | bearer + **signed authority envelopes** (user intent / override) — *in development, see below* |
+| authority | bearer token only | bearer + **signed authority envelopes** (user intent / override), asymmetric per-node keys |
 
 `src/` keeps the original TypeScript for reference; it is not compiled.
 
@@ -27,13 +27,16 @@ metrics all originate there — thank you for a solid base. This fork differs:
 ```
 index.js            bundle entry — re-exports lib/index.js for DSH patches
 lib/index.js        the plugin (plain ESM)
-lib/authority.js    HKDF derivation, canonical envelope sign/verify, jti ledger
+lib/authority.js    v2 Ed25519 envelopes + legacy v1 HMAC, canonical forms, jti ledger
+lib/keys.js         per-node key pair: load / generate / 0600 storage / kid + fingerprint
 lib/grants.js       grant store (mint/revoke/envelopeFor, read-time expiry)
-lib/inbound.js      fail-down gate + bounded security log
+lib/inbound.js      peer-key registry + fail-down gate + bounded security log
 lib/outbound.js     peer client that attaches live grants
 lib/notices.js      agent-facing authority notices (facts, never grant bytes)
 lib/approvals.js    approval broker (queue for hosts with no prompt surface)
 lib/task-store.js   file-backed A2A Task store (write-chained JSON)
+bin/nuncia-identity.js  print this node's kid/fingerprint/public key, check a peer key
+bin/nuncia-token.js     print the derived bearer (per node name)
 cordis.patch.yml    default profile patch (inserts the plugin)
 tests/              unit tests + end-to-end harnesses (npm test)
 ```
@@ -97,9 +100,14 @@ give it `host`/`port` and it serves on its own listener.
         authority:                      # DESIGN §20 (off by default)
           enabled: true
           nodeName: phone               # this node's name inside envelopes
-          pairingSecretEnv: NUNCIA_PAIRING_SECRET   # preferred: EXPORTED, not just set
-          pairingSecret: '…'            # fallback: inline, for hosts you cannot re-env
-          peers: [desk]                 # allowed inbound origins; empty = any signed origin
+          nodeKeyFile: ~/.dsh/nuncia/nuncia-node.key   # Ed25519 private key (0600)
+          # nodeKey: '<base64url PKCS8>'  inline alternative for fixed-env hosts
+          peers:                        # each peer's PUBLIC key — all verification needs
+            - name: desk
+              publicKey: MCowBQYDK2VwAyEA…
+              kid: 7jsvWk5X142WqWk7     # optional pin; boot fails if the key disagrees
+          allowV1: true                 # accept pre-v2 HMAC envelopes while migrating
+          pairingSecretEnv: NUNCIA_PAIRING_SECRET   # now derives ONLY the bearer token
           peerUrls: ['desk=http://192.168.1.20:4123']
           maxWindowMs: 600000           # hard ceiling for any grant (10 min)
           grantTtlMs: 300000            # default window when mint omits ttlMs
@@ -112,23 +120,32 @@ give it `host`/`port` and it serves on its own listener.
 ```
 
 **Bearer resolution.** With the authority layer on, the bearer token is derived
-from the pairing secret, so `auth: {type: bearer}` is a complete configuration —
-the same secret that signs envelopes also authenticates the endpoint. Precedence
-is `auth.token` → `auth.tokenEnv` → derived. A paired node therefore needs one
-paste, not two; `tokenEnv` remains useful for nodes that are *not* paired.
+from the pairing secret **and the node name** (`nuncia/bearer:<nodeName>`), so two
+nodes sharing one secret no longer share one literal token. `auth: {type: bearer}`
+is still a complete configuration. Precedence is `auth.token` → `auth.tokenEnv` →
+derived. The secret derives *only* the token: envelope signatures use the node key
+(§ Pairing below).
 
 **Where the secret comes from.** `pairingSecretEnv` wins when that variable is
 exported into the harness process. `pairingSecret` is the inline fallback for
-hosts whose environment is fixed at launch (a GUI app), where the alternative is
-restarting the whole session to pair a node. A secret in a profile file is only
-as private as that file — prefer the environment when you can export it.
+hosts whose environment is fixed at launch (a GUI app). A secret in a profile file
+is only as private as that file — prefer the environment when you can export it.
 
-Since the bearer is derived, you never copy one between machines. To get it for
-a `curl` on the node itself:
+Since the bearer is derived per node, a peer needs the **target's** name to compute
+the token it should send. To print one locally:
 
 ```sh
-node bin/nuncia-token.js                    # from NUNCIA_PAIRING_SECRET
-node bin/nuncia-token.js <secret>           # explicit
+node bin/nuncia-token.js --node phone              # from NUNCIA_PAIRING_SECRET
+node bin/nuncia-token.js <secret> --node phone     # explicit secret
+node bin/nuncia-token.js                           # pre-v2 derivation (no node name)
+```
+
+**Node identity.** `bin/nuncia-identity.js` prints this node's `kid`, fingerprint
+and public key, plus a ready-to-paste `peers:` entry for the other side:
+
+```sh
+node bin/nuncia-identity.js --name phone
+node bin/nuncia-identity.js --check <base64url-key> [--kid 7jsv…]   # inspect/pin a peer key
 ```
 
 Clients may override the preset per request with
@@ -161,17 +178,44 @@ A bearer token authenticates a *connection*. It says nothing about whether the
 remote agent is speaking **for the user**. That claim travels only in a signed
 envelope under `params.metadata.authority`; message text is never authority.
 
-### One secret, two capabilities
+### Pairing: exchange public keys, never a signing root
 
-Paste the same `NUNCIA_PAIRING_SECRET` on both nodes. HKDF derives the bearer
-token and the envelope signing key with independent info strings, so pairing is
-one paste and a leaked token cannot sign.
+v2 authority is **asymmetric**. Each node generates one Ed25519 key pair
+(`nodeKeyFile`, mode 0600) and signs with the private half; the receiver verifies
+with the sender's **public** half. Pairing is therefore a public exchange:
 
 ```sh
-export NUNCIA_PAIRING_SECRET="$(openssl rand -base64 32)"   # generate once, paste on both
+# on each node
+node bin/nuncia-identity.js --name phone     # prints kid, fingerprint, publicKey
+```
+
+Paste the printed `peers:` entry into the *other* node's config. Then compare
+fingerprints over a channel you trust (out of band) — the config is the trust
+anchor, not the AgentCard, which is unauthenticated.
+
+Why it is built this way: with the earlier shared-HMAC scheme, verification and
+minting needed the same key, so any peer that could *check* intent could equally
+*produce* it — and, because `origin` was only a signed string, under any node's
+name. v2 makes `origin` resolve to a key (`kid`), and a verifier holds no signing
+capability at all. A forged envelope claiming a peer's name fails at `kid` or
+signature and degrades to `peer`.
+
+The pairing secret still exists, for two narrower jobs: deriving the bearer token,
+and accepting **legacy v1** envelopes during migration (`allowV1`, on by default).
+It is no longer an authority root, so losing it does not let anyone mint intent.
+
+```sh
+export NUNCIA_PAIRING_SECRET="$(openssl rand -base64 32)"   # bearer only now
 ```
 
 `export` matters: a bare `NAME=value` line never reaches the harness process.
+
+**Migration.** A node with only a pairing secret keeps minting v1 envelopes; peers
+with `allowV1: true` still honour them. To move a node to v2: generate its key,
+give every peer its public key, and give it theirs. Once no v1 traffic remains,
+set `allowV1: false` everywhere. A version mismatch is refused explicitly, never
+silently downgraded — an Ed25519 envelope is not accepted by the HMAC verifier and
+vice versa.
 
 ### Minting (the user's act)
 
@@ -237,7 +281,7 @@ Rules worth knowing:
 - **Responses carry no authority.** A response that claims it is treated as
   `peer` and reported as `authority-in-response`.
 - **Non-transitive.** An envelope minted *for* a peer is rejected if it comes
-  back inbound (`target-mismatch`).
+  back inbound, and a node cannot speak for itself (`origin-mismatch`).
 - **Revoke ends the local window.** It stops future attachment; a peer that
   already holds an envelope keeps it until `exp` — which is why windows are short.
 
@@ -252,12 +296,14 @@ npm run test:unit # unit only (no sockets, no fake harness)
 |---|---|
 | `tests/test-authority.test.mjs` | derivation, canonical encoding, per-field tamper, expiry/skew/window, binding, jti ledger |
 | `tests/test-grants.test.mjs` | mint/revoke, validation, read-time expiry, envelope preference, persistence tamper + rotation |
-| `tests/test-inbound.test.mjs` | fail-down reasons, allowlist, same-link replay, no signature echo |
+| `tests/test-inbound.test.mjs` | v1 fail-down reasons, allowlist, same-link replay, no signature echo |
+| `tests/test-v2.test.mjs` | Ed25519 envelopes, kid binding, **cross-key forgery refused**, gate clock, legacy gating |
+| `tests/test-keys.test.mjs` | key generation/0600, reload identity, refuse-to-overwrite, inline/env precedence |
 | `tests/test-outbound.test.mjs` | grant attachment, unknown peer, non-200, response authority claims |
 | `tests/test-notices.test.mjs` | notice wording, remaining-time, no grant material |
 | `tests/test-approvals.test.mjs` | broker decisions, expiry fail-closed, cancel-on-unload |
 | `tests/test-smoke.mjs` | the real SDK against a fake ctx: card, auth, task lifecycle |
-| `tests/test-authority-http.mjs` | live HTTP: mint → send → tamper → fail down → revoke → expiry notice |
+| `tests/test-authority-http.mjs` | live HTTP with two keys: intent, **impersonation refused**, unknown origin, bounce, legacy v1, expiry notice |
 | `tests/test-tools.mjs` | registration, approval ladder, auto-attach seen in the peer's body |
 | `tests/test-auth.mjs` | bearer resolution, inline secret vs env precedence |
 
@@ -273,25 +319,28 @@ terminal state), and the counters.
 
 ## Remaining work (DESIGN §20.7)
 
-The authority core (P1) is implemented: pairing derivation, envelope
-sign/verify, jti ledger, grants (mint / revoke / expiry / optional persistence),
-inbound fail-down with security events, admin endpoints, `request_user_intent`,
-`a2a_send` with auto-attach, and the AgentCard authority extension — covered by
-82 unit tests plus four end-to-end harnesses.
+The authority core is implemented: **per-node Ed25519 identities (v2)**, public-key
+pairing, envelope sign/verify, jti ledger, grants (mint / revoke / expiry / optional
+persistence), inbound fail-down with security events, admin endpoints,
+`request_user_intent`, `a2a_send` with auto-attach, legacy v1 acceptance, and the
+AgentCard authority extension — covered by 114 unit tests plus four end-to-end
+harnesses.
 
 Still open:
 
-- **P1 finish** — the live two-node LAN demo (desktop ↔ AVD): L2 honored, an
-  expiring grant drifting back to L1 observable on the wire, revocation
-  mid-conversation.
+- **~~P1 finish~~ — done.** Live two-node demo (desktop ↔ AVD, 2026-10-20): intent
+  honored both directions with the signer's `kid` recorded, a forged envelope refused
+  as `signature`, legacy v1 honored, expiry drifting back to `peer`.
 - **P2 — Chatelaine layer**: housekeeping workspace, operator handles
   (`op_<16hex>`), per-task 7-day TTL and pruning, house rules in a tiny git repo,
   security-event → notification path.
 - **P3 — inter-session + Sylvia glue**: `targetSession` spike, panel
   mint/revoke/badge buttons, netgate exemption (`allowA2AOnMetered`), remembered
   peers.
-- **P4 — hardening**: Noise transport, per-node keys, EN + ZH READMEs (same
-  pattern as the mobile fork), arm64 physical-device run.
+- **P4 — hardening**: Noise transport, key rotation/revocation story, EN + ZH READMEs (same
+  pattern as the mobile fork), arm64 physical-device run. *Per-node keys landed early*
+  (P1.5, v2 envelopes) because the shared-HMAC design could not give verification
+  without minting.
 
 Design decisions still open (§20.8): the native dialog surface per platform.
 The second one — how the receiving **agent** learns its request arrived with
@@ -303,3 +352,5 @@ visible as *authority it already has*, not as a token it could replay.
 ## License
 
 BSD-3-Clause, as upstream.
+
+
