@@ -123,6 +123,14 @@ hosts whose environment is fixed at launch (a GUI app), where the alternative is
 restarting the whole session to pair a node. A secret in a profile file is only
 as private as that file — prefer the environment when you can export it.
 
+Since the bearer is derived, you never copy one between machines. To get it for
+a `curl` on the node itself:
+
+```sh
+node bin/nuncia-token.js                    # from NUNCIA_PAIRING_SECRET
+node bin/nuncia-token.js <secret>           # explicit
+```
+
 Clients may override the preset per request with
 `params.metadata.agentPreset` (alias `preset`).
 
