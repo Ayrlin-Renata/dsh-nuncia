@@ -1,3 +1,7 @@
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { apply } from '../lib/index.js'
 // Every probe sends `connection: close` so the server closes sockets after
 // each response — pooled keep-alive sockets at process exit otherwise trip a
@@ -47,12 +51,13 @@ const fakeCtx = {
                 h(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'smoke reply' }] } } })
               }
               for (const h of listeners['session/event'] ?? []) {
-                h(session, { type: 'turn/end', data: { reason: { kind: 'stop' } } })
+                h(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
               }
               resolve()
             }, 60)
           })
         },
+        inject: (_message) => {},
         cancel: (_c) => {},
         whenIdle: async () => { if (pendingTurn) await pendingTurn },
       }
@@ -62,6 +67,8 @@ const fakeCtx = {
 }
 
 process.env.NUNCIA_TEST_TOKEN = 'smoke-token-123'
+const HOUSE = join(tmpdir(), 'nuncia-house-smoke')
+rmSync(HOUSE, { recursive: true, force: true })
 await apply(fakeCtx, {
   path: '/a2a',
   agentCardPath: '/.well-known/agent.json',
@@ -69,6 +76,7 @@ await apply(fakeCtx, {
   port: 4199,
   host: '127.0.0.1',
   auth: { type: 'bearer', tokenEnv: 'NUNCIA_TEST_TOKEN' },
+  chatelaine: { workspace: HOUSE, sessionId: 'session-chatelaine-smoke' },
 })
 
 const TOKEN = 'smoke-token-123'

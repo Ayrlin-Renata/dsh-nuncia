@@ -113,6 +113,16 @@ give it `host`/`port` and it serves on its own listener.
           grantTtlMs: 300000            # default window when mint omits ttlMs
           persistGrants: false          # keep windows across restarts
           tools: true                   # register request_user_intent + a2a_send
+        chatelaine:                     # DESIGN §20.4 / §20.11 (P2)
+          workspace: ~/.sylvia/housekeeping   # operators work here; house rules live here
+          rulesFile: HOUSE-RULES.md
+          rules: true                   # seed + version the rules in a local git repo
+          stateDir: auto                # default: <workspace>/.nuncia (gitignored)
+          sessionId: ''                 # pin the chatelaine to an existing session
+          preset: standard              # chatelaine + operator preset; default agentPreset
+          operatorTtlMs: 604800000      # operator sessions live 7 days (DESIGN §20.4)
+          tools: true                   # register report_to_chatelaine + reply_to_operator
+          forwardQuestions: true        # forward an operator's ask-user to the chatelaine
         agentCard:
           name: Nuncia
           description: A DeepSeek Harness agent exposed over the agent2agent protocol
@@ -163,6 +173,10 @@ Clients may override the preset per request with
 | POST | `/{adminPath}/revoke` | end a grant by id |
 | GET | `/{adminPath}/requests` | pending approvals with the id a surface needs to decide — **loopback-only** |
 | POST | `/{adminPath}/requests/decide` | `{"id":"…","decision":"allowed-once"\|"rejected"\|"cancelled"}` — **loopback-only** |
+| GET | `/{adminPath}/rules` | house rules + git history — **loopback-only** (even with a bearer) |
+| PUT | `/{adminPath}/rules` | `{"rules":"…","summary":"…"}` — written, then auto-committed — **loopback-only** |
+| GET | `/{adminPath}/operators` | operator roster: handle, task, level, scope, expiry — **loopback-only** |
+| POST | `/{adminPath}/operators/prune` | `{"dryRun":true}` sweeps expired operators — **loopback-only** |
 | GET | `/{metricsPath}` | Prometheus text |
 
 While an agent turn runs, committed assistant messages stream as artifact
@@ -288,7 +302,7 @@ Rules worth knowing:
 ### Tests
 
 ```sh
-npm test          # everything: unit + all four end-to-end harnesses
+npm test          # everything: unit + all five end-to-end harnesses
 npm run test:unit # unit only (no sockets, no fake harness)
 ```
 
@@ -302,10 +316,57 @@ npm run test:unit # unit only (no sockets, no fake harness)
 | `tests/test-outbound.test.mjs` | grant attachment, unknown peer, non-200, response authority claims |
 | `tests/test-notices.test.mjs` | notice wording, remaining-time, no grant material |
 | `tests/test-approvals.test.mjs` | broker decisions, expiry fail-closed, cancel-on-unload |
+| `tests/test-house.test.mjs` | seed-once, one-commit-per-edit, local git identity, path-traversal refusal |
+| `tests/test-operators.test.mjs` | handle shape, persistence, read-time expiry, corrupt-book refusal |
 | `tests/test-smoke.mjs` | the real SDK against a fake ctx: card, auth, task lifecycle |
 | `tests/test-authority-http.mjs` | live HTTP with two keys: intent, **impersonation refused**, unknown origin, bounce, legacy v1, expiry notice |
 | `tests/test-tools.mjs` | registration, approval ladder, auto-attach seen in the peer's body |
 | `tests/test-auth.mjs` | bearer resolution, inline secret vs env precedence |
+| `tests/test-p2.mjs` | operator brief, handles, chatelaine round-trip, question forwarding, abort→CANCELED, expiry prune |
+
+## Chatelaine (DESIGN §20.11, P2)
+
+Operators are **real sessions** in a Housekeeping workspace, and one stable
+**chatelaine** session represents the human inside the node. Discipline is
+prompt-level (the operator decision of 2026-10-20): no hard tool caps yet — but
+the runtime is session-based so caps arrive later as config, not a rewrite.
+
+- **First contact** creates the operator session (workspace cwd, per-request
+  model/preset preserved), records a handle, attaches it to the workspace, and
+  injects the *operator brief* **before** the task's first turn: requester,
+  authority level, scope, remaining time, the reporting duty, and "never ask the
+  human directly". The handle also rides in the A2A task's metadata.
+- **The chatelaine** is adopted once (`chatelaine.json` in the state dir, or a
+  pinned `sessionId`), created in the workspace if absent. It is told of
+  contact, unexpected ends (`error`, `aborted`, `blocked`, `max-tokens` —
+  only `completed` counts as success), and expiry prunes. Reports use
+  `inject` (durable, no wake); questions use `followup`.
+- **Tools** (when `chatelaine.tools` is on):
+  - `report_to_chatelaine({summary, question?, urgency?})` — durable report;
+    `question` wakes the chatelaine. Every operator is told to use it before
+    anything consequential.
+  - `reply_to_operator({handle, message, wake?})` — the chatelaine answers an
+    operator by handle; unknown/expired handles are refused by name.
+- **Question forwarding** (`forwardQuestions`, on by default): an operator's
+  `ask_user_question` is intercepted at plugin scope, forwarded to the
+  chatelaine with a wake, and answered in place with "proceed on your
+  judgement" — an A2A session never hangs on a human who is not watching it.
+  Any other session falls through to the real UI untouched.
+- **House rules** live in `HOUSE-RULES.md` inside the workspace, versioned in a
+  **local git repo** (no remote, no push). Edits only through
+  `GET|PUT {adminPath}/rules` (loopback-only even with a bearer), each write
+  committed; agents read the rules via the skill/notice. The seed covers the
+  reporting discipline, authority handling and escalation policy.
+- **Seven-day operators**: per-task `expiresAt` from `operatorTtlMs` (default
+  7d, overriding the global `taskTtlMs`). The prune pass archives the session
+  (the shipped surface has no session deletion — archive is the ceiling),
+  drops the record and handle, and tells the chatelaine once.
+  `POST {adminPath}/operators/prune` with `{"dryRun":true}` sweeps on demand.
+
+Live on both nodes (2026-10-20): desk task completed in 4 s with the operator's
+brief as its first context line; AVD adopted its chatelaine and recorded the
+contact notice; both `/status` endpoints report the house, the chatelaine
+session id, and the operator roster.
 
 ## Smoke test
 
@@ -331,12 +392,15 @@ Still open:
 - **~~P1 finish~~ — done.** Live two-node demo (desktop ↔ AVD, 2026-10-20): intent
   honored both directions with the signer's `kid` recorded, a forged envelope refused
   as `signature`, legacy v1 honored, expiry drifting back to `peer`.
-- **P2 — Chatelaine layer**: housekeeping workspace, operator handles
-  (`op_<16hex>`), per-task 7-day TTL and pruning, house rules in a tiny git repo,
-  security-event → notification path.
-- **P3 — inter-session + Sylvia glue**: `targetSession` spike, panel
-  mint/revoke/badge buttons, netgate exemption (`allowA2AOnMetered`), remembered
-  peers.
+- **~~P2 — Chatelaine layer~~ — done.** Housekeeping workspace + house rules in a
+  local git repo, operator handles (`op_<16hex>`), operator brief before the first
+  turn, `report_to_chatelaine` / `reply_to_operator`, question forwarding,
+  per-task 7-day TTL with archive-and-drop pruning, unexpected-end supervision,
+  `/status` operator roster. Live on desk and AVD (2026-10-20).
+- **P3 — inter-session + Sylvia glue**: panel mint/revoke/badge buttons,
+  netgate exemption (`allowA2AOnMetered`), remembered peers, toasts.
+  (The `targetSession` spike pulled forward: chatelaine↔operator reporting is
+  already cross-session via `agents.resume` + `inject`, P2.0-B in the plan.)
 - **P4 — hardening**: Noise transport, key rotation/revocation story, EN + ZH READMEs (same
   pattern as the mobile fork), arm64 physical-device run. *Per-node keys landed early*
   (P1.5, v2 envelopes) because the shared-HMAC design could not give verification

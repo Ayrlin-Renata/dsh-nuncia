@@ -14,12 +14,17 @@
  * Run: node test-tools.mjs   (exit 0 = all pass)
  */
 
+import { mkdtempSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { apply } from '../lib/index.js'
 
 process.env.NUNCIA_TEST_TOKEN = 'tools-token-123'
 process.env.NUNCIA_TEST_SECRET = 'tools-test-secret-0123456789'
+
+const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-house-tools-'))
 
 let failures = 0
 const check = (name, cond, detail = '') => {
@@ -104,12 +109,13 @@ const fakeCtx = {
 								h(agent.session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'ok' }] } } })
 							}
 							for (const h of listeners['session/event'] ?? []) {
-								h(agent.session, { type: 'turn/end', data: { reason: { kind: 'stop' } } })
+								h(agent.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
 							}
 							resolve()
 						}, 30)
 					})
 				},
+				inject: (_message) => {},
 				cancel: () => {},
 				whenIdle: async () => { if (pending) await pending },
 			}
@@ -125,6 +131,7 @@ await apply(fakeCtx, {
 	port: 4202,
 	host: '127.0.0.1',
 	auth: { type: 'bearer', tokenEnv: 'NUNCIA_TEST_TOKEN' },
+	chatelaine: { workspace: HOUSE, sessionId: 'session-chatelaine-tools' },
 	authority: {
 		enabled: true,
 		nodeName: 'phone',
@@ -138,15 +145,22 @@ const TOOL_TOKEN = 'tools-token-123'
 const ADMIN = { authorization: `Bearer ${TOOL_TOKEN}`, 'content-type': 'application/json', connection: 'close' }
 const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status', { headers: ADMIN })).json()
 
-// 1. both tools registered
-check('tools registered', registered.length === 2, `names=${registered.map((t) => t.name).join(',')}`)
+// 1. the four tools registered: two authority, two chatelaine
+check('tools registered', registered.length === 4, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'request_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
+const reportToChatelaine = registered.find((t) => t.name === 'report_to_chatelaine')
+const replyToOperator = registered.find((t) => t.name === 'reply_to_operator')
+check('chatelaine tools shape',
+	reportToChatelaine?.parameters?.required?.includes('summary') === true
+	&& replyToOperator?.parameters?.required?.includes('handle') === true
+	&& typeof reportToChatelaine?.execute === 'function'
+	&& typeof replyToOperator?.execute === 'function')
 check('request_user_intent shape', requestIntent?.parameters?.required?.includes('target') === true && typeof requestIntent?.output?.render === 'function')
 check('a2a_send shape', a2aSend?.parameters?.required?.includes('peer') === true && a2aSend?.parameters?.required?.includes('text') === true && typeof a2aSend?.execute === 'function')
 // The registry asserts output.schema is a supported JSON Schema; both tools
 // must expose an object-rooted schema with an explicit required list.
-for (const tool of [requestIntent, a2aSend]) {
+for (const tool of [requestIntent, a2aSend, reportToChatelaine, replyToOperator]) {
 	check(`${tool?.name} output schema is object-rooted`, tool?.output?.schema?.type === 'object' && Array.isArray(tool?.output?.schema?.required))
 	check(`${tool?.name} parameters are JSON Schema`, tool?.parameters?.type === 'object' && Array.isArray(tool?.parameters?.required))
 }

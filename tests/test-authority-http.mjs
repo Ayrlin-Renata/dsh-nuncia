@@ -38,6 +38,8 @@ import { describeNodeKey } from '../lib/keys.js'
 import { apply, isLoopbackRequest } from '../lib/index.js'
 
 const STATE = mkdtempSync(join(tmpdir(), 'nuncia-authhttp-'))
+// House rules + git history are written by apply(); keep them in scratch space.
+const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-house-authhttp-'))
 const SECRET = 'authority-test-secret-0123456789'
 process.env.NUNCIA_TEST_TOKEN = 'authority-token-123'
 process.env.NUNCIA_TEST_SECRET = SECRET
@@ -75,7 +77,7 @@ const fakeCtx = {
                 h(agent.session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'ok' }] } } })
               }
               for (const h of listeners['session/event'] ?? []) {
-                h(agent.session, { type: 'turn/end', data: { reason: { kind: 'stop' } } })
+                h(agent.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
               }
               resolve()
             }, 40)
@@ -98,6 +100,7 @@ await apply(fakeCtx, {
   host: '127.0.0.1',
   auth: { type: 'bearer', tokenEnv: 'NUNCIA_TEST_TOKEN' },
   persistenceRoot: STATE,
+  chatelaine: { workspace: HOUSE, sessionId: 'session-chatelaine-authhttp' },
   authority: {
     enabled: true,
     nodeName: 'phone',

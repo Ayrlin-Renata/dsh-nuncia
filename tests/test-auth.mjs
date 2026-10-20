@@ -28,6 +28,8 @@ const check = (name, cond, detail = '') => {
 
 // Keys and grants must not land in the repo: give every apply() a scratch dir.
 const STATE = mkdtempSync(join(tmpdir(), 'nuncia-auth-'))
+// The house writes a rules file + a git repo; keep it out of the user's home.
+const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-auth-house-'))
 
 const SECRET = 'inline-secret-0123456789-abcdefghij'
 const ENV_SECRET = 'env-secret-different-value-9876543210'
@@ -56,6 +58,7 @@ const base = {
 	taskTtlMs: 60000,
 	// Node keys and grant files belong in scratch space, never in the repo.
 	persistenceRoot: STATE,
+	chatelaine: { workspace: HOUSE },
 }
 
 // --- 1. inline secret + tokenless auth entirely derives the bearer -----------
