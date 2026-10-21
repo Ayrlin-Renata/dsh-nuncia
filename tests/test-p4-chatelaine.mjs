@@ -25,6 +25,10 @@ import { CHATELAINE_SUBDIR, createChatelaineRuntime } from '../lib/chatelaine.js
 
 const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-p41-'))
 const STATE = join(HOUSE, '.nuncia')
+// The brief embeds a snapshot of the rules at brief time (the chatelaine's
+// tool scope may not include fs tools), so give it content to embed.
+const RULES_MARKER = 'RULE-1-chatelaine-brief-snapshot'
+writeFileSync(join(HOUSE, 'HOUSE-RULES.md'), `# House rules\n${RULES_MARKER}\n`, 'utf8')
 const deliveries = []
 const created = []
 const attached = []
@@ -133,10 +137,12 @@ const brief = deliveries.find((delivery) => delivery.text.startsWith('[chatelain
 check('the brief was delivered', brief !== undefined, deliveries.map((d) => d.text.slice(0, 30)).join(' | '))
 check('the brief wakes it (followup, not a silent inject)', brief?.kind === 'followup', brief?.kind)
 check('the brief says it is the chatelaine, not an operator', /You are the chatelaine of node "testnode"/.test(brief?.text ?? ''), brief?.text?.split('\n')[0])
+check("the brief tells it its own name (the human's name book)", /Your name is testnode/.test(brief?.text ?? ''), brief?.text?.split('\n')[1])
 check('the brief names the house rules', (brief?.text ?? '').includes(join(HOUSE, 'HOUSE-RULES.md')))
+check('the brief embeds a snapshot of the rules', (brief?.text ?? '').includes(RULES_MARKER))
 
 const state = JSON.parse(readFileSync(join(STATE, 'chatelaine.json'), 'utf8'))
-check('the state records the brief', state.briefVersion === 1 && typeof state.briefedAt === 'string', JSON.stringify(state))
+check('the state records the brief', state.briefVersion === 2 && typeof state.briefedAt === 'string', JSON.stringify(state))
 
 // --- 4. a reload does not churn --------------------------------------------
 const createdBefore = created.length
@@ -160,7 +166,7 @@ check('the old id is kept for fallback', movedState.previousSessionId === first.
 // --- 6. describe() is what /status reports -------------------------------
 const described = await chatelaine.describe()
 check('describe reports the current session', described.sessionId === moved.sessionId, described.sessionId)
-check('describe reports the brief as current', described.briefCurrent === true && described.briefVersion === 1, JSON.stringify(described))
+check('describe reports the brief as current', described.briefCurrent === true && described.briefVersion === 2, JSON.stringify(described))
 check('describe reports where it lives', described.cwd === chatelaineCwd && described.workspaceTitle === 'Chatelaine', JSON.stringify({ cwd: described.cwd, title: described.workspaceTitle }))
 
 // --- 7. a chatelaine left in an old directory is relocated ----------------
@@ -176,7 +182,7 @@ writeFileSync(join(STATE, 'chatelaine.json'), JSON.stringify({
   version: 1,
   sessionId: legacyId,
   adoptedAt: new Date().toISOString(),
-  briefVersion: 1,
+  briefVersion: 2,
   briefedAt: new Date().toISOString(),
 }), 'utf8')
 

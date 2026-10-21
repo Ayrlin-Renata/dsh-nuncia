@@ -102,12 +102,14 @@ const cardNoAuth = await fetch('http://127.0.0.1:4199/.well-known/agent.json', {
 check('card without a bearer is refused', cardNoAuth.status === 401, `status=${cardNoAuth.status}`)
 const cardResp = await fetch('http://127.0.0.1:4199/.well-known/agent.json', { headers: { authorization: `Bearer ${TOKEN}`, connection: 'close' } })
 const card = await cardResp.json()
-check('agent card', card.name === 'DeepSeek Harness Agent' && card.supportedInterfaces[0].protocolVersion === '1.0', `${card.name} @ ${card.supportedInterfaces[0].url}`)
 // The minimal node card rides in capabilities.extensions (the SDK's toJSON
 // drops unknown top-level fields).
 const nodeExt = (card.capabilities?.extensions ?? []).find((ext) => ext.uri === 'https://nuncia.local/a2a/node')
 check('minimal node card present', nodeExt !== undefined, JSON.stringify(nodeExt?.params))
-check('node card carries name, platform and announcement', nodeExt?.params?.name !== undefined && nodeExt?.params?.platform !== undefined && nodeExt?.params?.announcement !== undefined, JSON.stringify(nodeExt?.params))
+// The card's face is the node's adopted name (m05102): with no authority
+// config, both the top-level name and the node extension fall back together.
+check('agent card', card.name === nodeExt?.params?.name && card.supportedInterfaces[0].protocolVersion === '1.0', `${card.name} @ ${card.supportedInterfaces[0].url}`)
+check('node card carries a non-default name, platform and announcement', nodeExt?.params?.name !== undefined && nodeExt?.params?.name !== '' && nodeExt?.params?.platform !== undefined && nodeExt?.params?.announcement !== undefined, JSON.stringify(nodeExt?.params))
 
 // 2. no/wrong token -> 401
 const bad = await fetch('http://127.0.0.1:4199/a2a', { method: 'POST', headers: { authorization: 'Bearer wrong', connection: 'close' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage' }) })

@@ -101,10 +101,11 @@ give it `host`/`port` and it serves on its own listener.
         persistenceRoot: ./.sessions
         authority:                      # DESIGN §20 (off by default)
           enabled: true
-          nodeName: phone               # this node's name inside envelopes
-          # nodeNameFile: ~/.sylvia/node-names.txt
-          #   newline-delimited names; when nodeName is unset the first boot
-          #   picks one at random and remembers it (P3.0)
+          # nodeName: phone             # pin a fixed name (rarely wanted)
+          nodeNameFile: ~/.sylvia/list_names.txt
+          #   newline-delimited name pool (Sylvia ships assets/list_names.txt).
+          #   When nodeName is unset, first boot picks one at random, uses it on
+          #   the agent card AND names the chatelaine after it (P3.0, 2026-10-21).
           nodeKeyFile: ~/.dsh/nuncia/nuncia-node.key   # Ed25519 private key (0600)
           # nodeKey: '<base64url PKCS8>'  inline alternative for fixed-env hosts
           peers:                        # each peer's PUBLIC key — all verification needs

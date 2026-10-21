@@ -145,14 +145,16 @@ const TOOL_TOKEN = 'tools-token-123'
 const ADMIN = { authorization: `Bearer ${TOOL_TOKEN}`, 'content-type': 'application/json', connection: 'close' }
 const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status', { headers: ADMIN })).json()
 
-// 1. the tools registered: two authority, four chatelaine (the fourth —
-// message_peer_chatelaine — is chatelaine-only and needs an outbound client)
-check('tools registered', registered.length === 6, `names=${registered.map((t) => t.name).join(',')}`)
+// 1. the tools registered: two authority, five chatelaine (operator_authority
+// added 2026-10-21; message_peer_chatelaine is chatelaine-only and needs an
+// outbound client)
+check('tools registered', registered.length === 7, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'request_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
 const reportToChatelaine = registered.find((t) => t.name === 'report_to_chatelaine')
 const replyToOperator = registered.find((t) => t.name === 'reply_to_operator')
 const messagePeer = registered.find((t) => t.name === 'message_peer_chatelaine')
+const opAuthority = registered.find((t) => t.name === 'operator_authority')
 check('chatelaine tools shape',
 	reportToChatelaine?.parameters?.required?.includes('summary') === true
 	&& replyToOperator?.parameters?.required?.includes('handle') === true
@@ -166,6 +168,7 @@ check('message_peer_chatelaine shape',
 	messagePeer?.parameters?.required?.includes('peer') === true
 	&& messagePeer?.parameters?.required?.includes('message') === true
 	&& typeof messagePeer?.execute === 'function')
+check('operator_authority shape', opAuthority?.parameters?.properties?.handle !== undefined && typeof opAuthority?.execute === 'function' && opAuthority?.output?.schema?.type === 'object')
 // It is a CHATELAINE tool: an operator must not be able to speak for the human.
 check('message_peer_chatelaine refuses a non-chatelaine caller', await (async () => {
 	try {
