@@ -23,12 +23,13 @@
   },
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/task-store.js && node --check lib/authority.js && node --check lib/grants.js && node --check lib/inbound.js && node --check lib/outbound.js && node --check lib/notices.js && node --check lib/approvals.js && node --check lib/keys.js && node --check lib/house.js && node --check lib/operators.js && node --check lib/chatelaine.js && node --check lib/identity.js && node --check lib/secrets.js",
-    "test": "node --test tests/test-authority.test.mjs tests/test-grants.test.mjs tests/test-inbound.test.mjs tests/test-outbound.test.mjs tests/test-notices.test.mjs tests/test-approvals.test.mjs tests/test-keys.test.mjs tests/test-v2.test.mjs tests/test-house.test.mjs tests/test-operators.test.mjs tests/test-secrets.test.mjs tests/test-vault.test.mjs && node tests/test-smoke.mjs && node tests/test-authority-http.mjs && node tests/test-tools.mjs && node tests/test-auth.mjs && node tests/test-p2.mjs && node tests/test-p3-auth.mjs",
-    "test:unit": "node --test tests/test-authority.test.mjs tests/test-grants.test.mjs tests/test-inbound.test.mjs tests/test-outbound.test.mjs tests/test-notices.test.mjs tests/test-approvals.test.mjs tests/test-keys.test.mjs tests/test-v2.test.mjs tests/test-house.test.mjs tests/test-operators.test.mjs tests/test-secrets.test.mjs tests/test-vault.test.mjs"
+    "test": "node --test tests/test-chatelaine-id.test.mjs tests/test-authority.test.mjs tests/test-grants.test.mjs tests/test-inbound.test.mjs tests/test-outbound.test.mjs tests/test-notices.test.mjs tests/test-approvals.test.mjs tests/test-keys.test.mjs tests/test-v2.test.mjs tests/test-house.test.mjs tests/test-operators.test.mjs tests/test-secrets.test.mjs tests/test-vault.test.mjs && node tests/test-smoke.mjs && node tests/test-authority-http.mjs && node tests/test-tools.mjs && node tests/test-auth.mjs && node tests/test-p2.mjs && node tests/test-p3-auth.mjs",
+    "test:unit": "node --test tests/test-authority.test.mjs tests/test-grants.test.mjs tests/test-inbound.test.mjs tests/test-outbound.test.mjs tests/test-notices.test.mjs tests/test-approvals.test.mjs tests/test-keys.test.mjs tests/test-v2.test.mjs tests/test-house.test.mjs tests/test-operators.test.mjs tests/test-secrets.test.mjs tests/test-vault.test.mjs tests/test-chatelaine-id.test.mjs"
   },
   "_note": "The DSH host uses the @deepseek-ai/schemastery fork (zod-like), NOT the cordis schemastery this config schema imports — so plain schemastery is a real dependency here, not an ambient symlink (device verified 2026-10-19: plain schemastery is absent from the entire DSH global tree). @deepseek-ai/dsh-llm + @deepseek-ai/dsh-session ARE ambient imports, resolved by symlinks into the CLI's node_modules (sylvia-bridge pattern); they must not be installable peers (npm dist-tags satisfy no sane range).",
   "bin": {
     "nuncia-token": "bin/nuncia-token.js",
-    "nuncia-identity": "bin/nuncia-identity.js"
+    "nuncia-identity": "bin/nuncia-identity.js",
+    "nuncia-secrets": "bin/nuncia-secrets.js"
   }
 }
