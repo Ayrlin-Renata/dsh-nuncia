@@ -19,6 +19,8 @@ import { apply } from '../lib/index.js'
 // publishes the A2A task's terminal status and lets message/send resolve.
 
 const created = []
+// The chatelaine session the harness configures: a sink for reports.
+const chatelaineAgent = { session: { id: 'session-chatelaine-smoke' }, inject: (_m) => {}, followup: (_m) => {}, cancel: (_c) => {}, whenIdle: async () => {} }
 const listeners = {}       // event name -> [handler]
 const disposers = []       // effect disposers retained, NOT fired eagerly
 // Host services this plugin reads. `agentDefaultModel` is the real model-binding
@@ -33,6 +35,11 @@ const fakeCtx = {
   on: (name, handler) => { (listeners[name] ??= []).push(handler) },
   effect: (fn, name) => { const d = fn(); disposers.push([name, d]); },
   agents: {
+    get: (id) => (String(id) === 'session-chatelaine-smoke' ? chatelaineAgent : undefined),
+    resume: async ({ resumeSessionId }) => {
+      if (String(resumeSessionId) === 'session-chatelaine-smoke') return { agent: chatelaineAgent, dispose: async () => {} }
+      throw new Error(`session "${resumeSessionId}" not found`)
+    },
     create: async (opts) => {
       created.push(opts)
       let pendingTurn = undefined
