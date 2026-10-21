@@ -6,8 +6,10 @@
  *
  *  - The session may not exist yet (a fresh node) — it must be created.
  *  - The stored id may point at a session that is GONE (the store was wiped,
- *    or the id was migrated to a tagged form whose directory does not exist)
- *    — the node must fall back to the previous id, and then to a new session.
+ *    or the id was migrated to a tagged form whose directory does not exist).
+ *    A v4 session's id lives in its own header, so an id migration can never
+ *    rename the session — the tagged id must be MATERIALISED. The old thread
+ *    stays on disk as history and as a fallback if creation fails.
  *  - Delivery must never throw into the calling turn: a report that cannot be
  *    delivered says so and returns.
  *
@@ -95,7 +97,7 @@ test('a fresh node creates the chatelaine session on the first report', async ()
 	assert.match(log.created[0], /^a2a-chatelaine-/)
 })
 
-test('a stored id whose session is gone falls back to the previous id', async () => {
+test('a migrated id with no session behind it is created under that id', async () => {
 	const { dir, stateFile } = await scratchDir()
 	// The state points at a TAGGED id (the migrated form) but only the OLD
 	// id exists on disk — exactly the state a migration leaves behind.
@@ -117,11 +119,12 @@ test('a stored id whose session is gone falls back to the previous id', async ()
 	const result = await runtime.report('hello')
 
 	assert.equal(result.delivered, true, `report failed: ${result.reason}`)
-	assert.equal(result.sessionId, 'session-11111111-2222-3333-4444-555555555555', 'the report landed in the thread that EXISTS')
-	assert.deepEqual(log.resumed, [
-		'a2a-chatelaine-11111111-2222-3333-4444-555555555555',
-		'session-11111111-2222-3333-4444-555555555555',
-	], 'the dead tagged id was tried first, then the thread that exists')
+	// The OLD thread still exists and could have been used, but a chatelaine
+	// under an untagged id is invisible to the metered gate — so the tagged id
+	// is materialised instead, and the old thread stays as history.
+	assert.equal(result.sessionId, 'a2a-chatelaine-11111111-2222-3333-4444-555555555555')
+	assert.deepEqual(log.created, ['a2a-chatelaine-11111111-2222-3333-4444-555555555555'], 'created under the tagged id')
+	assert.ok(!log.resumed.includes('session-11111111-2222-3333-4444-555555555555'), 'the untagged thread was not used as the destination')
 })
 
 test('a stored id whose session AND its predecessor are gone gets a new session', async () => {
@@ -144,9 +147,8 @@ test('a stored id whose session AND its predecessor are gone gets a new session'
 	const result = await runtime.report('hello')
 
 	assert.equal(result.delivered, true, `report failed: ${result.reason}`)
-	assert.equal(log.created.length, 1, 'a fresh session was created')
-	assert.match(log.created[0], /^a2a-chatelaine-/)
-	assert.notEqual(log.created[0], 'a2a-chatelaine-11111111-2222-3333-4444-555555555555')
+	assert.equal(log.created.length, 1, 'a session was created')
+	assert.equal(log.created[0], 'a2a-chatelaine-11111111-2222-3333-4444-555555555555', 'under the stored tagged id, so /status stops lying')
 })
 
 test('an unreachable chatelaine never throws into the calling turn', async () => {

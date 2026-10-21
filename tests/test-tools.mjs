@@ -145,12 +145,14 @@ const TOOL_TOKEN = 'tools-token-123'
 const ADMIN = { authorization: `Bearer ${TOOL_TOKEN}`, 'content-type': 'application/json', connection: 'close' }
 const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status', { headers: ADMIN })).json()
 
-// 1. the five tools registered: two authority, three chatelaine
-check('tools registered', registered.length === 5, `names=${registered.map((t) => t.name).join(',')}`)
+// 1. the tools registered: two authority, four chatelaine (the fourth —
+// message_peer_chatelaine — is chatelaine-only and needs an outbound client)
+check('tools registered', registered.length === 6, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'request_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
 const reportToChatelaine = registered.find((t) => t.name === 'report_to_chatelaine')
 const replyToOperator = registered.find((t) => t.name === 'reply_to_operator')
+const messagePeer = registered.find((t) => t.name === 'message_peer_chatelaine')
 check('chatelaine tools shape',
 	reportToChatelaine?.parameters?.required?.includes('summary') === true
 	&& replyToOperator?.parameters?.required?.includes('handle') === true
@@ -160,7 +162,20 @@ check('request_user_intent shape', requestIntent?.parameters?.required?.includes
 check('a2a_send shape', a2aSend?.parameters?.required?.includes('peer') === true && a2aSend?.parameters?.required?.includes('text') === true && typeof a2aSend?.execute === 'function')
 // The registry asserts output.schema is a supported JSON Schema; both tools
 // must expose an object-rooted schema with an explicit required list.
-for (const tool of [requestIntent, a2aSend, reportToChatelaine, replyToOperator]) {
+check('message_peer_chatelaine shape',
+	messagePeer?.parameters?.required?.includes('peer') === true
+	&& messagePeer?.parameters?.required?.includes('message') === true
+	&& typeof messagePeer?.execute === 'function')
+// It is a CHATELAINE tool: an operator must not be able to speak for the human.
+check('message_peer_chatelaine refuses a non-chatelaine caller', await (async () => {
+	try {
+		await messagePeer.execute({ peer: 'desk', message: 'hello' }, { agent: { id: 'op_someone_else' } })
+		return false
+	} catch (error) {
+		return /only the chatelaine/i.test(error instanceof Error ? error.message : String(error))
+	}
+})())
+for (const tool of [requestIntent, a2aSend, reportToChatelaine, replyToOperator, messagePeer]) {
 	check(`${tool?.name} output schema is object-rooted`, tool?.output?.schema?.type === 'object' && Array.isArray(tool?.output?.schema?.required))
 	check(`${tool?.name} parameters are JSON Schema`, tool?.parameters?.type === 'object' && Array.isArray(tool?.parameters?.required))
 }
