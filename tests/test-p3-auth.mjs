@@ -77,6 +77,10 @@ try {
 }
 check('a raw install generates and persists a bearer', generated.length >= 32, `len=${generated.length}`)
 
+// Boot now creates the chatelaine session (so the human has one to open), so
+// "no session was created" must mean "none created BY THIS REQUEST".
+const createdBeforeRefusal = created.length
+
 // 1. The endpoint SERVES — but only to a request with the right bearer.
 const noAuth = await fetch(`http://127.0.0.1:${PORT}/a2a`, {
   method: 'POST',
@@ -86,7 +90,7 @@ const noAuth = await fetch(`http://127.0.0.1:${PORT}/a2a`, {
 check('a request without a bearer is refused', noAuth.status === 401, `status=${noAuth.status}`)
 const notice = await noAuth.json()
 check('the refusal carries an invalid-auth notice', notice.error === 'unauthorized' && typeof notice.detail === 'string', JSON.stringify(notice))
-check('no session was created by the refused request', created.length === 0, `created=${created.length}`)
+check('no session was created by the refused request', created.length === createdBeforeRefusal, `created=${created.length - createdBeforeRefusal}`)
 
 const wrongAuth = await fetch(`http://127.0.0.1:${PORT}/a2a`, {
   method: 'POST',

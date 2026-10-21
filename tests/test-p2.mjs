@@ -141,7 +141,10 @@ check('brief states the handle, level and workspace', brief !== undefined && bri
 check('operator attached to the housekeeping workspace', attached.includes(operatorSession?.id), JSON.stringify(attached))
 
 // --- 2. chatelaine adopted + told about contact -----------------------------
-const chatelaineSession = created.find((entry) => entry.options.meta?.cwd === HOUSE && entry.id !== operatorSession?.id)
+// Since P4.1 the chatelaine is created at BOOT (in its own directory, so DSH can
+// list it), not lazily on the first report — so find it by its tag, not by the
+// operators' cwd.
+const chatelaineSession = created.find((entry) => String(entry.id).startsWith('a2a-chatelaine-'))
 check('chatelaine session adopted once', chatelaineSession !== undefined, created.map((entry) => entry.id).join(','))
 // P3.1: both session kinds carry the durable A2A tag in their SESSION ID (the
 // v4 session header accepts only `origin: "subagent"`, so the id is the
