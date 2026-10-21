@@ -257,13 +257,13 @@ const sendBack = await a2aSend.execute({ peer: 'desk', text: 'reply to the peer'
 check('send result echoes the exchange', sendBack.contextId === task1.contextId, JSON.stringify(sendBack))
 check('send carried the caller contextId', peerRequests.length > beforeSends && peerRequests[peerRequests.length - 1].params.contextId === task1.contextId, JSON.stringify(peerRequests[peerRequests.length - 1]?.params ?? {}))
 
-// 9c. An explicit exchange id lets a caller with no task context (the
-// chatelaine) continue one exchange across retries instead of opening a new
-// remote operator every time.
-const explicitExchange = 'aaaa1111-bbbb-2222-cccc-333344445555'
-const explicitBack = await a2aSend.execute({ peer: 'desk', text: 'same exchange please', contextId: explicitExchange }, { agent: { id: 'chatelaine-agent' } })
-check('explicit exchange is used verbatim', peerRequests[peerRequests.length - 1].params.contextId === explicitExchange, JSON.stringify(peerRequests[peerRequests.length - 1]?.params?.contextId))
-check('explicit exchange is echoed back', explicitBack.contextId === explicitExchange, JSON.stringify(explicitBack))
+// 9c. The sender is blind: the tool takes a peer and text, and the exchange id
+// is decided by the client library (the caller's task, or an open exchange it
+// keeps per peer). A caller can neither name a remote operator nor a session.
+check('the send tool takes only a peer and text', JSON.stringify(Object.keys(a2aSend.parameters.properties).sort()) === JSON.stringify(['peer', 'text']), JSON.stringify(Object.keys(a2aSend.parameters.properties)))
+const blindSend = await a2aSend.execute({ peer: 'desk', text: 'no context from me' }, { agent: { id: 'chatelaine-agent' } })
+check('a send with no task context still opens an exchange', typeof peerRequests[peerRequests.length - 1].params.contextId === 'string' && peerRequests[peerRequests.length - 1].params.contextId.length > 0, JSON.stringify(peerRequests[peerRequests.length - 1]?.params?.contextId))
+check('the exchange is echoed to the caller', typeof blindSend.contextId === 'string' && blindSend.contextId.length > 0, JSON.stringify(blindSend))
 
 // 7. live Web-UI question card grants in broker mode without touching the
 //    broker queue (a connected composer beats an idle admin queue)
