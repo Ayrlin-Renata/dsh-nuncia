@@ -9,8 +9,8 @@
  *   1. First contact creates an operator in the workspace, records a handle,
  *      and injects the operator brief BEFORE the task turn.
  *   2. The handle rides in the A2A task metadata.
- *   3. report_to_chatelaine delivers into the chatelaine session (created once).
- *   4. reply_to_operator delivers back into the operator session.
+ *   3. message_chatelaine delivers into the chatelaine session (created once).
+ *   4. message_local_session delivers back into the operator session.
  *   5. An operator's ask-user question is forwarded to the chatelaine and
  *      answered in place (custom answer), so it never hangs.
  *   6. An aborted turn is CANCELED, not COMPLETED (the old lie).
@@ -153,9 +153,9 @@ const rosterBrief = operatorBrief({
 })
 check('brief names the node it runs on', /on node "sylviana"/.test(rosterBrief), rosterBrief.split('\n')[0])
 check('brief lists paired peers with verification state',
-  /Paired peers you can send to with a2a_send \(by name\): vienzie, oldbox \(legacy key\)/.test(rosterBrief))
+  /Peers paired with this node \(by name\): vienzie, oldbox \(legacy key\)/.test(rosterBrief))
 check('brief without peers says so and stops', /No peers are paired with this node right now/.test(operatorBrief({ handle: 'h', taskId: 't', nodeName: 'n', peers: [], level: 'peer', workspace: HOUSE })))
-check('brief names the tools it needs', /a2a_send \(message a paired peer/.test(brief.text) && /report_to_chatelaine/.test(brief.text))
+check('brief names the tools it needs', /message_chatelaine \(report, ask a question/.test(brief.text) && /operator_authority/.test(brief.text))
 check('brief forbids digging for configuration', /do NOT read configuration, grep the disk/.test(brief.text))
 check('operator attached to the housekeeping workspace', attached.includes(operatorSession?.id), JSON.stringify(attached))
 
@@ -174,18 +174,18 @@ const chatelaineDeliveries = () => deliveries.filter((delivery) => delivery.sess
 check('contact reported to the chatelaine', chatelaineDeliveries().some((delivery) => /^Contact: .* opened task/.test(delivery.text)), JSON.stringify(chatelaineDeliveries().map((delivery) => delivery.text.slice(0, 40))))
 
 // --- 3. tools round-trip ----------------------------------------------------
-const reportTool = registered.find((tool) => tool.name === 'report_to_chatelaine')
-const replyTool = registered.find((tool) => tool.name === 'reply_to_operator')
-check('both chatelaine tools registered', reportTool !== undefined && replyTool !== undefined, registered.map((tool) => tool.name).join(','))
+const chatTool = registered.find((tool) => tool.name === 'message_chatelaine')
+const localTool = registered.find((tool) => tool.name === 'message_local_session')
+check('chatelaine lane tools registered', chatTool !== undefined && localTool !== undefined, registered.map((tool) => tool.name).join(','))
 
-const reported = await reportTool.execute({ summary: 'about to touch files' }, { agent: { id: operatorSession.id } })
-check('report_to_chatelaine delivers', reported.delivered === true, JSON.stringify(reported))
+const reported = await chatTool.execute({ message: 'about to touch files' }, { agent: { id: operatorSession.id } })
+check('message_chatelaine delivers', reported.delivered === true, JSON.stringify(reported))
 check('report landed in the chatelaine session', chatelaineDeliveries().some((delivery) => delivery.text.includes('about to touch files')))
 
-const replied = await replyTool.execute({ handle: task1.metadata.handle, message: 'approved, go ahead' }, { agent: { id: chatelaineSession.id } })
+const replied = await localTool.execute({ session: task1.metadata.handle, message: 'approved, go ahead' }, { agent: { id: chatelaineSession.id } })
 // The reply names the TASK (the record key), while the session it lands in is
 // the tagged operator session.
-check('reply_to_operator delivers', replied.delivered === true && replied.taskId === task1.id, JSON.stringify(replied))
+check('message_local_session delivers', replied.delivered === true && replied.taskId === task1.id, JSON.stringify(replied))
 check('reply landed in the operator session', operatorDeliveries().some((delivery) => delivery.kind === 'followup' && delivery.text.includes('approved, go ahead')))
 
 // --- 4. question forwarding -------------------------------------------------
@@ -235,7 +235,7 @@ check('fresh task first turn carries the preamble',
 check('continuation turn does NOT get the preamble again',
 	firstDeliveries.filter((delivery) => delivery.kind === 'followup' && delivery.text.includes('following up on the same thread')).length === 1
 		&& firstDeliveries.every((delivery) => !(delivery.kind === 'followup' && delivery.text.includes('following up on the same thread') && delivery.text.startsWith('[A2A task]'))))
-const contReply = await replyTool.execute({ handle: task1.metadata.handle, message: 'still here' }, { agent: { id: chatelaineSession.id } })
+const contReply = await localTool.execute({ session: task1.metadata.handle, message: 'still here' }, { agent: { id: chatelaineSession.id } })
 check('reply follows the re-keyed handle', contReply.delivered === true && contReply.taskId === taskCont.id, JSON.stringify(contReply))
 
 // --- 5. abort is not success ------------------------------------------------
@@ -269,7 +269,7 @@ check('expired operators pruned', roster2.operators?.length === 0, `pruned=${pru
 check('sessions archived, never silently deleted', archived.length >= 1, JSON.stringify(archived.map((entry) => entry.options)))
 check('chatelaine told about the prune', chatelaineDeliveries().some((delivery) => /Pruned \d+ expired operator/.test(delivery.text)))
 let deadHandle = ''
-try { await replyTool.execute({ handle: task1.metadata.handle, message: 'too late' }, {}) } catch (error) { deadHandle = error.message }
+try { await localTool.execute({ session: task1.metadata.handle, message: 'too late' }, { agent: { id: chatelaineSession.id } }) } catch (error) { deadHandle = error.message }
 check('a pruned handle is refused by name', /unknown operator handle/.test(deadHandle), deadHandle)
 
 console.log(failures === 0 ? 'ALL P2 PASS' : `P2 FAILURES: ${failures}`)

@@ -1,15 +1,19 @@
 /**
- * Tests for the two authority tools registered by lib/index.js.
+ * Tests for the authority + chatelaine tools registered by lib/index.js.
  *
  * Boots the plugin with a fake DSH context that HAS a tools service and an
  * approval service, so the real `apply()` wiring is exercised — then runs the
  * registered definitions the way the tool registry would.
  *
  * Covers:
- *  - both tools register when a tools service exists
- *  - `request_user_intent` mints only on `allowed-once`
+ *  - the seven tools register when a tools service exists
+ *  - the chatelaine-only gate: send / mint / inbound-lane tools refuse callers
+ *    that are not the chatelaine session (§20.16)
+ *  - `ask_user_intent` mints only on `allowed-once`
  *  - a refused / unavailable approval mints nothing and says why
  *  - `a2a_send` reaches the peer and auto-attaches the live grant
+ *  - `send_nuncia` replies on the exchange a peer opened, without the caller
+ *    knowing any exchange id (§20.16)
  *
  * Run: node test-tools.mjs   (exit 0 = all pass)
  */
@@ -98,6 +102,16 @@ const fakeCtx = {
 	effect: (fn) => { fn() },
 	emit: () => {},
 	agents: {
+		// get/resume back what create made: the chatelaine MUST be able to
+		// resolve its own session, or its report-fallback keeps adopting new
+		// ones and the §20.16 gate id never stabilises.
+		known: new Map(),
+		get: async (id) => fakeCtx.agents.known.get(String(id))?.agent,
+		resume: async (id) => {
+			const agent = fakeCtx.agents.known.get(String(id))?.agent
+			if (agent === undefined) throw new Error('test-session: agent not found')
+			return agent
+		},
 		create: async (opts) => {
 			let pending
 			const agent = {
@@ -119,6 +133,7 @@ const fakeCtx = {
 				cancel: () => {},
 				whenIdle: async () => { if (pending) await pending },
 			}
+			fakeCtx.agents.known.set(String(opts.sessionId), { agent })
 			return { agent, dispose: async () => {} }
 		},
 	},
@@ -131,7 +146,11 @@ await apply(fakeCtx, {
 	port: 4202,
 	host: '127.0.0.1',
 	auth: { type: 'bearer', tokenEnv: 'NUNCIA_TEST_TOKEN' },
-	chatelaine: { workspace: HOUSE, sessionId: 'session-chatelaine-tools' },
+	// No pinned chatelaine sessionId: the runtime adopts (and creates) one, and
+	// the tool gates must track the ADOPTED id — the configured string alone is
+	// only a seed pointer and may legitimately be replaced by the live
+	// resolution path (§20.16).
+	chatelaine: { workspace: HOUSE },
 	authority: {
 		enabled: true,
 		nodeName: 'phone',
@@ -144,47 +163,52 @@ await apply(fakeCtx, {
 const TOOL_TOKEN = 'tools-token-123'
 const ADMIN = { authorization: `Bearer ${TOOL_TOKEN}`, 'content-type': 'application/json', connection: 'close' }
 const status = async () => (await fetch('http://127.0.0.1:4202/a2a/admin/status', { headers: ADMIN })).json()
-
-// 1. the tools registered: two authority, five chatelaine (operator_authority
-// added 2026-10-21; message_peer_chatelaine is chatelaine-only and needs an
-// outbound client)
-check('tools registered', registered.length === 7, `names=${registered.map((t) => t.name).join(',')}`)
-const requestIntent = registered.find((t) => t.name === 'request_user_intent')
-const a2aSend = registered.find((t) => t.name === 'a2a_send')
-const reportToChatelaine = registered.find((t) => t.name === 'report_to_chatelaine')
-const replyToOperator = registered.find((t) => t.name === 'reply_to_operator')
-const messagePeer = registered.find((t) => t.name === 'message_peer_chatelaine')
-const opAuthority = registered.find((t) => t.name === 'operator_authority')
-check('chatelaine tools shape',
-	reportToChatelaine?.parameters?.required?.includes('summary') === true
-	&& replyToOperator?.parameters?.required?.includes('handle') === true
-	&& typeof reportToChatelaine?.execute === 'function'
-	&& typeof replyToOperator?.execute === 'function')
-check('request_user_intent shape', requestIntent?.parameters?.required?.includes('target') === true && typeof requestIntent?.output?.render === 'function')
-check('a2a_send shape', a2aSend?.parameters?.required?.includes('peer') === true && a2aSend?.parameters?.required?.includes('text') === true && typeof a2aSend?.execute === 'function')
-// The registry asserts output.schema is a supported JSON Schema; both tools
-// must expose an object-rooted schema with an explicit required list.
-check('message_peer_chatelaine shape',
-	messagePeer?.parameters?.required?.includes('peer') === true
-	&& messagePeer?.parameters?.required?.includes('message') === true
-	&& typeof messagePeer?.execute === 'function')
-check('operator_authority shape', opAuthority?.parameters?.properties?.handle !== undefined && typeof opAuthority?.execute === 'function' && opAuthority?.output?.schema?.type === 'object')
-// It is a CHATELAINE tool: an operator must not be able to speak for the human.
-check('message_peer_chatelaine refuses a non-chatelaine caller', await (async () => {
+// Every non-report tool is the chatelaine's (§20.16). The configured chatelaine
+// session id is 'session-chatelaine-tools' (apply config below); anything else
+// must be refused with the routing hint.
+const refusesNonChatelaine = async (tool, args) => {
 	try {
-		await messagePeer.execute({ peer: 'desk', message: 'hello' }, { agent: { id: 'op_someone_else' } })
+		await tool.execute(args, { agent: { id: 'op_someone_else' } })
 		return false
 	} catch (error) {
-		return /only the chatelaine/i.test(error instanceof Error ? error.message : String(error))
+		return /chatelaine/i.test(error instanceof Error ? error.message : String(error))
 	}
-})())
-for (const tool of [requestIntent, a2aSend, reportToChatelaine, replyToOperator, messagePeer]) {
+}
+
+// 1. the tools registered: two authority (chatelaine-only since §20.16),
+// five chatelaine-lane
+check('tools registered', registered.length === 7, `names=${registered.map((t) => t.name).join(',')}`)
+const requestIntent = registered.find((t) => t.name === 'ask_user_intent')
+const a2aSend = registered.find((t) => t.name === 'a2a_send')
+const messageChatelaine = registered.find((t) => t.name === 'message_chatelaine')
+const messageLocalSession = registered.find((t) => t.name === 'message_local_session')
+const sendNuncia = registered.find((t) => t.name === 'send_nuncia')
+const opAuthority = registered.find((t) => t.name === 'operator_authority')
+check('message_chatelaine shape', messageChatelaine?.parameters?.required?.includes('message') === true && typeof messageChatelaine?.execute === 'function')
+check('message_local_session shape',
+	messageLocalSession?.parameters?.required?.includes('session') === true
+	&& messageLocalSession?.parameters?.required?.includes('message') === true
+	&& typeof messageLocalSession?.execute === 'function')
+check('ask_user_intent shape', requestIntent?.parameters?.required?.includes('target') === true && typeof requestIntent?.output?.render === 'function')
+check('a2a_send shape', a2aSend?.parameters?.required?.includes('peer') === true && a2aSend?.parameters?.required?.includes('text') === true && typeof a2aSend?.execute === 'function')
+check('send_nuncia shape', sendNuncia?.parameters?.required?.includes('peer') === true && sendNuncia?.parameters?.required?.includes('text') === true && typeof sendNuncia?.execute === 'function')
+check('operator_authority shape', opAuthority?.parameters?.properties?.handle !== undefined && typeof opAuthority?.execute === 'function' && opAuthority?.output?.schema?.type === 'object')
+// CHATELAINE-only tools: an operator (or any other session) must not be able
+// to speak for the node. (Identity gate — §20.16.)
+check('send_nuncia refuses a non-chatelaine caller', await refusesNonChatelaine(sendNuncia, { peer: 'desk', text: 'hi' }))
+check('message_local_session refuses a non-chatelaine caller', await refusesNonChatelaine(messageLocalSession, { session: 'op_someone_else', message: 'hello' }))
+for (const tool of [requestIntent, a2aSend, messageLocalSession, sendNuncia]) {
 	check(`${tool?.name} output schema is object-rooted`, tool?.output?.schema?.type === 'object' && Array.isArray(tool?.output?.schema?.required))
 	check(`${tool?.name} parameters are JSON Schema`, tool?.parameters?.type === 'object' && Array.isArray(tool?.parameters?.required))
 }
 
-// 2. approval granted -> mint happens
-const exec = { agent: { id: 'agent-1' }, callId: 'call-1' }
+// 2. approval granted -> mint happens. These tools are CHATELAINE-only since
+// §20.16, so every legal call below runs AS the chatelaine. Its id is whatever
+// the runtime adopted (createSession may mint a tagged id, so the configured
+// string 'session-chatelaine-tools' cannot be assumed) — query it.
+const chatelaineId = (await status())?.chatelaine?.sessionId
+const exec = { agent: { id: chatelaineId }, callId: 'call-chatelaine' }
+check('the chatelaine adopted a session', typeof chatelaineId === 'string' && chatelaineId.length > 0, String(chatelaineId))
 const granted = await requestIntent.execute({ target: 'desk', scope: 'housekeeping' }, exec)
 check('grant minted on approval', granted.granted === true && typeof granted.id === 'string', JSON.stringify(granted))
 check('approval was asked with a reason', approvalRequests.length === 1 && typeof approvalRequests[0].reason === 'string', approvalRequests[0]?.reason)
@@ -193,7 +217,7 @@ const s1 = await status()
 check('grant visible in status', s1.authority.grants.length === 1 && s1.authority.grants[0].target === 'desk', JSON.stringify(s1.authority.grants))
 
 // 3. a2a_send reaches the peer and auto-attaches the live grant
-const sent = await a2aSend.execute({ peer: 'desk', text: 'hello peer' }, {})
+const sent = await a2aSend.execute({ peer: 'desk', text: 'hello peer' }, exec)
 check('send returned peer state', sent.state === 'TASK_STATE_COMPLETED' && sent.text === 'peer says hi', JSON.stringify(sent))
 check('send attached the grant', peerRequests.length === 1 && peerRequests[0].params.metadata.authority?.level === 'intent', JSON.stringify(peerRequests[0]?.params?.metadata))
 check('send used the derived bearer', peerRequests[0]?.params?.message?.parts?.[0]?.text === 'hello peer')
@@ -235,33 +259,35 @@ check('queued refusal is explained', /did not approve \(rejected\)/.test(missing
 // 6. unknown peer error lists what is known
 let peerError = ''
 try {
-	await a2aSend.execute({ peer: 'ghost', text: 'hi' }, {})
+	await a2aSend.execute({ peer: 'ghost', text: 'hi' }, exec)
 } catch (error) {
 	peerError = error.message
 }
 check('unknown peer names the roster', /Known peers: desk/.test(peerError), peerError)
 
-// 9b. a2a_send threads the CALLING task's contextId (exchange continuity): a
-// retry or follow-up from inside a task keeps the SAME remote operator instead
-// of minting a fresh one on every send (user observation 2026-10-21: a retry
-// storm created unlinked operators on the peer). A task is first opened the
-// normal way; then a send "from inside it" must carry that contextId.
+// 9b. send_nuncia threads the exchange the peer opened (continuity): a peer's
+// first message owns an exchange id; the chatelaine replying via send_nuncia
+// must land on THAT exchange without naming it (§20.16: senders never learn
+// operator/contract ids). The task is opened the normal way (unclaimed origin),
+// then the chatelaine replies by peer name only.
 const beforeSends = peerRequests.length
 const task1Res = await fetch('http://127.0.0.1:4202/a2a', {
 	method: 'POST', headers: ADMIN,
 	body: JSON.stringify({ jsonrpc: '2.0', id: '9b', method: 'SendMessage', params: { message: { messageId: 'm-9b-open', role: 'user', parts: [{ kind: 'text', text: 'open an exchange' }] }, metadata: {} } }),
 })
-const task1 = (await task1Res.json())?.result?.task ?? (await task1Res.json())?.result
+const task1 = (await task1Res.json())?.result?.task
 check('opened an exchange for the send test', typeof task1?.contextId === 'string' && task1?.contextId.length > 0, JSON.stringify(task1?.status ?? {}))
-const sendBack = await a2aSend.execute({ peer: 'desk', text: 'reply to the peer' }, { agent: { id: task1.id } })
-check('send result echoes the exchange', sendBack.contextId === task1.contextId, JSON.stringify(sendBack))
-check('send carried the caller contextId', peerRequests.length > beforeSends && peerRequests[peerRequests.length - 1].params.contextId === task1.contextId, JSON.stringify(peerRequests[peerRequests.length - 1]?.params ?? {}))
+const sendBack = await sendNuncia.execute({ peer: 'desk', text: 'reply to the peer' }, exec)
+// taskId in the result is the PEER's task (what the remote node answered under);
+// the exchange we sent on is echoed as contextId.
+check('send_nuncia echoed the exchange', sendBack.contextId === task1.contextId, JSON.stringify(sendBack))
+check('send_nuncia carried the peer contextId', peerRequests.length > beforeSends && peerRequests[peerRequests.length - 1].params.contextId === task1.contextId, JSON.stringify(peerRequests[peerRequests.length - 1]?.params ?? {}))
 
 // 9c. The sender is blind: the tool takes a peer and text, and the exchange id
 // is decided by the client library (the caller's task, or an open exchange it
 // keeps per peer). A caller can neither name a remote operator nor a session.
 check('the send tool takes only a peer and text', JSON.stringify(Object.keys(a2aSend.parameters.properties).sort()) === JSON.stringify(['peer', 'text']), JSON.stringify(Object.keys(a2aSend.parameters.properties)))
-const blindSend = await a2aSend.execute({ peer: 'desk', text: 'no context from me' }, { agent: { id: 'chatelaine-agent' } })
+const blindSend = await a2aSend.execute({ peer: 'desk', text: 'no context from me' }, exec)
 check('a send with no task context still opens an exchange', typeof peerRequests[peerRequests.length - 1].params.contextId === 'string' && peerRequests[peerRequests.length - 1].params.contextId.length > 0, JSON.stringify(peerRequests[peerRequests.length - 1]?.params?.contextId))
 check('the exchange is echoed to the caller', typeof blindSend.contextId === 'string' && blindSend.contextId.length > 0, JSON.stringify(blindSend))
 

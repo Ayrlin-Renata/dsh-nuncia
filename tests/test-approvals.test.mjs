@@ -116,9 +116,9 @@ test('an announce hook runs on creation and cannot strand a request', async () =
 
 test('pending requests carry no secrets', () => {
 	const { broker } = makeBroker()
-	broker.request({ reason: 'grant intent to desk', target: 'desk', level: 'intent', scope: 'ops', toolName: 'request_user_intent' })
+	broker.request({ reason: 'grant intent to desk', target: 'desk', level: 'intent', scope: 'ops', toolName: 'ask_user_intent' })
 	const [pending] = broker.list()
 	const serialized = JSON.stringify(pending)
 	assert.doesNotMatch(serialized, /\bsig\b|jti|secret/i)
-	assert.equal(pending.toolName, 'request_user_intent')
+	assert.equal(pending.toolName, 'ask_user_intent')
 })
