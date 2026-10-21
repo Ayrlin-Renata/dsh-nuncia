@@ -16,7 +16,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import {
 	DEFAULT_SECRETS_KEY_ENV,
@@ -35,9 +35,15 @@ const keyEnv = (() => {
 })()
 const fileFlag = args.indexOf('--file')
 const file = fileFlag >= 0 ? args[fileFlag + 1] : join(homedir(), '.sylvia', 'secrets.enc')
-const auditFile = join(file.replace(/\.enc$/, ''), 'secrets-access.log')
+// The tripwire is a SIBLING of the vault, so the plugin, the daemon and this
+// CLI all land in the same file without any configuration. An earlier version
+// derived it by stripping ".enc" and appending "/secrets-access.log", which
+// pointed at a directory that never exists — so the trail silently recorded
+// nothing.
 const auditFileFlag = args.indexOf('--audit')
-const audit = auditFileFlag >= 0 ? args[auditFileFlag + 1] : join(homedir(), '.sylvia', 'secrets-access.log')
+const audit = auditFileFlag >= 0
+	? args[auditFileFlag + 1]
+	: join(dirname(file), 'secrets-access.log')
 
 const { passphrase, source } = resolvePassphrase({ envName: keyEnv })
 if (passphrase === undefined) {

@@ -95,3 +95,24 @@ test('opening the vault is recorded in the audit log', async () => {
 		await cleanup()
 	}
 })
+
+//
+// The tripwire is ONE file. The plugin and the daemon both read the vault, so
+// both must write the same log — otherwise "who opened the vault?" has two
+// answers and neither is complete.
+test('the audit log is written where it was pointed', async () => {
+  const s = await scratch();
+  const env = { VAULT_KEY: 'placement-passphrase' };
+  await writeSecretsFile(s.file, { NUNCIA_ADMIN_TOKEN: 'token' }, env.VAULT_KEY);
+  const result = loadVaultIntoEnvironment({
+    file: s.file,
+    auditFile: s.audit,
+    keyEnv: 'VAULT_KEY',
+    env,
+    logger: { warn: () => {} },
+  });
+  assert.equal(result.loaded, true);
+  const line = await readFile(s.audit, 'utf8');
+  assert.match(line, /secrets=\[NUNCIA_ADMIN_TOKEN\]/);
+  await s.cleanup();
+});

@@ -135,3 +135,17 @@ test('the passphrase resolves from the environment first, then a file', async ()
 test('an empty passphrase never derives a key', () => {
 	assert.throws(() => encryptSecrets({ A: 'b' }, ''), /passphrase is required/)
 })
+
+//
+// The tripwire must be a SIBLING of the vault, so the plugin, the daemon and
+// the CLI all land in the same file with no configuration at all.
+test('the audit path is a sibling of the vault', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nuncia-sibling-'));
+  const vault = join(dir, 'secrets.enc');
+  await writeSecretsFile(vault, { NUNCIA_ADMIN_TOKEN: 'token' }, 'pass');
+  const audit = join(dir, 'secrets-access.log');
+  await recordSecretAccess(audit, { source: 'test', values: ['NUNCIA_ADMIN_TOKEN'], reason: 'sibling' });
+  const line = await readFile(audit, 'utf8');
+  assert.match(line, /secrets=\[NUNCIA_ADMIN_TOKEN\]/);
+  await rm(dir, { recursive: true, force: true });
+});
