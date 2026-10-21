@@ -241,6 +241,30 @@ try {
 }
 check('unknown peer names the roster', /Known peers: desk/.test(peerError), peerError)
 
+// 9b. a2a_send threads the CALLING task's contextId (exchange continuity): a
+// retry or follow-up from inside a task keeps the SAME remote operator instead
+// of minting a fresh one on every send (user observation 2026-10-21: a retry
+// storm created unlinked operators on the peer). A task is first opened the
+// normal way; then a send "from inside it" must carry that contextId.
+const beforeSends = peerRequests.length
+const task1Res = await fetch('http://127.0.0.1:4202/a2a', {
+	method: 'POST', headers: ADMIN,
+	body: JSON.stringify({ jsonrpc: '2.0', id: '9b', method: 'SendMessage', params: { message: { messageId: 'm-9b-open', role: 'user', parts: [{ kind: 'text', text: 'open an exchange' }] }, metadata: {} } }),
+})
+const task1 = (await task1Res.json())?.result?.task ?? (await task1Res.json())?.result
+check('opened an exchange for the send test', typeof task1?.contextId === 'string' && task1?.contextId.length > 0, JSON.stringify(task1?.status ?? {}))
+const sendBack = await a2aSend.execute({ peer: 'desk', text: 'reply to the peer' }, { agent: { id: task1.id } })
+check('send result echoes the exchange', sendBack.contextId === task1.contextId, JSON.stringify(sendBack))
+check('send carried the caller contextId', peerRequests.length > beforeSends && peerRequests[peerRequests.length - 1].params.contextId === task1.contextId, JSON.stringify(peerRequests[peerRequests.length - 1]?.params ?? {}))
+
+// 9c. An explicit exchange id lets a caller with no task context (the
+// chatelaine) continue one exchange across retries instead of opening a new
+// remote operator every time.
+const explicitExchange = 'aaaa1111-bbbb-2222-cccc-333344445555'
+const explicitBack = await a2aSend.execute({ peer: 'desk', text: 'same exchange please', contextId: explicitExchange }, { agent: { id: 'chatelaine-agent' } })
+check('explicit exchange is used verbatim', peerRequests[peerRequests.length - 1].params.contextId === explicitExchange, JSON.stringify(peerRequests[peerRequests.length - 1]?.params?.contextId))
+check('explicit exchange is echoed back', explicitBack.contextId === explicitExchange, JSON.stringify(explicitBack))
+
 // 7. live Web-UI question card grants in broker mode without touching the
 //    broker queue (a connected composer beats an idle admin queue)
 questionsMode = 'allow'

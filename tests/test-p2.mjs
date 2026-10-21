@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { apply } from '../lib/index.js'
+import { operatorBrief } from '../lib/chatelaine.js'
 
 const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-p2-'))
 process.env.NUNCIA_TEST_TOKEN = 'p2-token-123'
@@ -138,6 +139,24 @@ const operatorDeliveries = () => deliveries.filter((delivery) => delivery.sessio
 const brief = operatorDeliveries().find((delivery) => delivery.text.startsWith('[operator brief]'))
 check('operator brief injected before the turn', brief !== undefined, brief?.text?.split('\n')[0])
 check('brief states the handle, level and workspace', brief !== undefined && brief.text.includes(task1.metadata.handle) && /authority is peer/.test(brief.text) && brief.text.includes(HOUSE))
+// The brief must answer the two questions an operator cannot look up without
+// excavating the node (observed live: 45 tool calls to find a peer name and a
+// send path). Exercised directly on the exported builder: this suite runs with
+// authority disabled, so the live brief above legitimately has no node/roster.
+const rosterBrief = operatorBrief({
+  handle: 'op_0123456789abcdef',
+  taskId: 'task-x',
+  nodeName: 'sylviana',
+  peers: [{ name: 'vienzie', kid: 'W0jt', canVerifyV2: true }, { name: 'oldbox', canVerifyV2: false }],
+  level: 'peer',
+  workspace: HOUSE,
+})
+check('brief names the node it runs on', /on node "sylviana"/.test(rosterBrief), rosterBrief.split('\n')[0])
+check('brief lists paired peers with verification state',
+  /Paired peers you can send to with a2a_send \(by name\): vienzie, oldbox \(legacy key\)/.test(rosterBrief))
+check('brief without peers says so and stops', /No peers are paired with this node right now/.test(operatorBrief({ handle: 'h', taskId: 't', nodeName: 'n', peers: [], level: 'peer', workspace: HOUSE })))
+check('brief names the tools it needs', /a2a_send \(message a paired peer/.test(brief.text) && /report_to_chatelaine/.test(brief.text))
+check('brief forbids digging for configuration', /do NOT read configuration, grep the disk/.test(brief.text))
 check('operator attached to the housekeeping workspace', attached.includes(operatorSession?.id), JSON.stringify(attached))
 
 // --- 2. chatelaine adopted + told about contact -----------------------------
@@ -183,6 +202,41 @@ check('question forwarded to the chatelaine with a wake', chatelaineDeliveries()
 let fellThrough = false
 await questionHandler({ questions: [{ id: 'q2', question: 'anything' }], agent: { id: 'session-not-ours' } }, () => { fellThrough = true; return 'ui' })
 check('foreign session question falls through', fellThrough === true)
+
+// --- 4b. continued conversation returns to the SAME operator session --------
+// The user rule (2026-10-21): continued A2A from the same source goes to the
+// same operator by default. A caller that keeps the contextId (the way A2A
+// exchanges work) must land on the existing operator, not mint a new one.
+const contContextId = task1?.contextId
+check('task response carries a contextId', typeof contContextId === 'string' && contContextId.length > 0, contContextId)
+const operatorsBefore = created.filter((entry) => entry.options.meta?.cwd === HOUSE).length
+const sendCont = await post({ jsonrpc: '2.0', id: 21, method: 'SendMessage', params: { message: { messageId: 'm-cont-1', role: 'user', contextId: contContextId, parts: [{ kind: 'text', text: 'following up on the same thread' }] }, metadata: {} } })
+const taskCont = (await sendCont.json())?.result?.task
+await sleep(80)
+check('continuation completed', taskCont?.status?.state === 'TASK_STATE_COMPLETED', JSON.stringify(taskCont?.status))
+check('continuation keeps the context', taskCont?.contextId === contContextId, taskCont?.contextId)
+check('continuation is a new task id', taskCont?.id !== task1.id)
+const operatorsAfter = created.filter((entry) => entry.options.meta?.cwd === HOUSE).length
+check('no second operator session was created', operatorsAfter === operatorsBefore, `${operatorsBefore} -> ${operatorsAfter}`)
+check('follow-up delivered to the same session', operatorDeliveries().some((delivery) => delivery.text.includes('following up on the same thread')))
+const rosterCont = await (await fetch('http://127.0.0.1:4210/a2a/admin/operators', { headers: ADMIN })).json()
+check('handle survives the re-key', rosterCont.operators?.some((op) => op.handle === task1.metadata.handle && op.taskId === taskCont.id), JSON.stringify(rosterCont.operators))
+
+// --- 4c. the fresh-task preamble keeps small tasks small ---------------------
+// Live finding (2026-10-21): peers' one-line questions ("Reply with exactly:
+// X") sent the model digging through config and the network to "verify" the
+// ask. A fresh operator's first message is now prefixed with a brief that says
+// answer-and-finish; continuations must NOT get it again.
+const firstDeliveries = operatorDeliveries()
+// The very first followup is the task turn itself; the brief rides as an inject.
+check('fresh task first turn carries the preamble',
+	firstDeliveries.some((delivery) => delivery.kind === 'followup' && delivery.text.startsWith('[A2A task]') && delivery.text.includes('exactly what it says')),
+	firstDeliveries.map((delivery) => delivery.text.slice(0, 30)).join('|'))
+check('continuation turn does NOT get the preamble again',
+	firstDeliveries.filter((delivery) => delivery.kind === 'followup' && delivery.text.includes('following up on the same thread')).length === 1
+		&& firstDeliveries.every((delivery) => !(delivery.kind === 'followup' && delivery.text.includes('following up on the same thread') && delivery.text.startsWith('[A2A task]'))))
+const contReply = await replyTool.execute({ handle: task1.metadata.handle, message: 'still here' }, { agent: { id: chatelaineSession.id } })
+check('reply follows the re-keyed handle', contReply.delivered === true && contReply.taskId === taskCont.id, JSON.stringify(contReply))
 
 // --- 5. abort is not success ------------------------------------------------
 const abortSession = (() => {
