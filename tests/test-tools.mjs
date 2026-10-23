@@ -176,9 +176,9 @@ const refusesNonChatelaine = async (tool, args) => {
 }
 
 // 1. the tools registered: two authority (chatelaine-only since §20.16),
-// five chatelaine-lane, plus §20.19's post_directive (chatelaine) and
-// refuse_request (operator)
-check('tools registered', registered.length === 9, `names=${registered.map((t) => t.name).join(',')}`)
+// five chatelaine-lane, §20.19's post_directive (chatelaine) and refuse_request
+// (operator), and §20.20's approve_local_contact + read_original_message
+check('tools registered', registered.length === 11, `names=${registered.map((t) => t.name).join(',')}`)
 const requestIntent = registered.find((t) => t.name === 'ask_user_intent')
 const a2aSend = registered.find((t) => t.name === 'a2a_send')
 const messageChatelaine = registered.find((t) => t.name === 'message_chatelaine')
@@ -187,6 +187,8 @@ const sendNuncia = registered.find((t) => t.name === 'send_nuncia')
 const opAuthority = registered.find((t) => t.name === 'operator_authority')
 const postDirective = registered.find((t) => t.name === 'post_directive')
 const refuseRequest = registered.find((t) => t.name === 'refuse_request')
+const approveContact = registered.find((t) => t.name === 'approve_local_contact')
+const readOriginal = registered.find((t) => t.name === 'read_original_message')
 check('message_chatelaine shape', messageChatelaine?.parameters?.required?.includes('message') === true && typeof messageChatelaine?.execute === 'function')
 check('message_local_session shape',
 	messageLocalSession?.parameters?.required?.includes('session') === true
@@ -203,12 +205,22 @@ check('post_directive shape',
 check('refuse_request shape',
 	refuseRequest?.parameters?.required?.includes('reason') === true
 	&& typeof refuseRequest?.execute === 'function')
+check('approve_local_contact shape',
+	approveContact?.parameters?.required?.includes('session') === true
+	&& approveContact?.parameters?.properties?.revoke !== undefined
+	&& typeof approveContact?.execute === 'function')
+check('read_original_message shape',
+	readOriginal?.parameters?.required?.includes('task') === true
+	&& typeof readOriginal?.execute === 'function'
+	&& /untrusted/i.test(readOriginal?.description ?? ''))
 // CHATELAINE-only tools: an operator (or any other session) must not be able
 // to speak for the node. (Identity gate — §20.16.)
 check('send_nuncia refuses a non-chatelaine caller', await refusesNonChatelaine(sendNuncia, { peer: 'desk', text: 'hi' }))
 check('post_directive refuses a non-chatelaine caller', await refusesNonChatelaine(postDirective, { text: 'no printer use' }))
 check('message_local_session refuses a non-chatelaine caller', await refusesNonChatelaine(messageLocalSession, { session: 'op_someone_else', message: 'hello' }))
-for (const tool of [requestIntent, a2aSend, messageLocalSession, sendNuncia]) {
+check('approve_local_contact refuses a non-chatelaine caller', await refusesNonChatelaine(approveContact, { session: 'op_someone_else' }))
+check('read_original_message refuses a non-chatelaine caller', await refusesNonChatelaine(readOriginal, { task: 'abc' }))
+for (const tool of [requestIntent, a2aSend, messageLocalSession, sendNuncia, approveContact, readOriginal]) {
 	check(`${tool?.name} output schema is object-rooted`, tool?.output?.schema?.type === 'object' && Array.isArray(tool?.output?.schema?.required))
 	check(`${tool?.name} parameters are JSON Schema`, tool?.parameters?.type === 'object' && Array.isArray(tool?.parameters?.required))
 }
