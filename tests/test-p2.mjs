@@ -27,6 +27,9 @@ import { apply } from '../lib/index.js'
 import { operatorBrief } from '../lib/chatelaine.js'
 
 const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-p2-'))
+// Operators work in their OWN directory under the house (§20.18): the house root
+// put every A2A session into a workspace the human already uses, which hid them.
+const OPERATORS = join(HOUSE, 'operators')
 process.env.NUNCIA_TEST_TOKEN = 'p2-token-123'
 
 const TOKEN = 'p2-token-123'
@@ -132,8 +135,8 @@ const task1 = (await send1.json())?.result?.task
 await sleep(80)
 
 check('task completed', task1?.status?.state === 'TASK_STATE_COMPLETED', `state=${task1?.status?.state}`)
-const operatorSession = created.find((entry) => entry.options.meta?.cwd === HOUSE)
-check('operator session created in the workspace', operatorSession !== undefined, `created=${created.map((entry) => entry.id).join(',')}`)
+const operatorSession = created.find((entry) => entry.options.meta?.cwd === OPERATORS)
+check('operator session created in the operators directory', operatorSession !== undefined, `created=${created.map((entry) => entry.id).join(',')}`)
 check('handle rides in task metadata', /^op_[0-9a-f]{16}$/.test(task1?.metadata?.handle ?? ''), JSON.stringify(task1?.metadata))
 const operatorDeliveries = () => deliveries.filter((delivery) => delivery.sessionId === operatorSession?.id)
 const brief = operatorDeliveries().find((delivery) => delivery.text.startsWith('[operator brief]'))

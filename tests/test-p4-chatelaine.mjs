@@ -21,7 +21,7 @@ import { existsSync, mkdtempSync } from 'node:fs'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CHATELAINE_SUBDIR, createChatelaineRuntime } from '../lib/chatelaine.js'
+import { CHATELAINE_BRIEF_VERSION, CHATELAINE_SUBDIR, createChatelaineRuntime } from '../lib/chatelaine.js'
 
 const HOUSE = mkdtempSync(join(tmpdir(), 'nuncia-p41-'))
 const STATE = join(HOUSE, '.nuncia')
@@ -142,7 +142,7 @@ check('the brief names the house rules', (brief?.text ?? '').includes(join(HOUSE
 check('the brief embeds a snapshot of the rules', (brief?.text ?? '').includes(RULES_MARKER))
 
 const state = JSON.parse(readFileSync(join(STATE, 'chatelaine.json'), 'utf8'))
-check('the state records the brief', state.briefVersion === 2 && typeof state.briefedAt === 'string', JSON.stringify(state))
+check('the state records the brief', state.briefVersion === CHATELAINE_BRIEF_VERSION && typeof state.briefedAt === 'string', JSON.stringify(state))
 
 // --- 4. a reload does not churn --------------------------------------------
 const createdBefore = created.length
@@ -166,7 +166,7 @@ check('the old id is kept for fallback', movedState.previousSessionId === first.
 // --- 6. describe() is what /status reports -------------------------------
 const described = await chatelaine.describe()
 check('describe reports the current session', described.sessionId === moved.sessionId, described.sessionId)
-check('describe reports the brief as current', described.briefCurrent === true && described.briefVersion === 2, JSON.stringify(described))
+check('describe reports the brief as current', described.briefCurrent === true && described.briefVersion === CHATELAINE_BRIEF_VERSION, JSON.stringify(described))
 check('describe reports where it lives', described.cwd === chatelaineCwd && described.workspaceTitle === 'Chatelaine', JSON.stringify({ cwd: described.cwd, title: described.workspaceTitle }))
 
 // --- 7. a chatelaine left in an old directory is relocated ----------------
